@@ -1,0 +1,45 @@
+// The match host (left-hand player) reports kick-off, every goal and the result.
+import { getStore } from '@/lib/store';
+import { applyResult, getMatch, markLive, type Tournament } from '@/lib/tournament';
+import { body, fail, json, loadOr404, playerByToken } from '@/lib/server';
+
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: Request, ctx: { params: Promise<{ code: string; id: string }> }) {
+  const { code, id } = await ctx.params;
+  const r = await loadOr404(code);
+  if (r.error) return r.error;
+  const b = await body(req);
+  const m0 = getMatch(r.t, id);
+  if (!m0) return fail('That match does not exist.', 404);
+  const me = playerByToken(r.t, b.token);
+  if (!me || me.id !== m0.a) return fail('Only the match host can report.', 403);
+  const sc = Array.isArray(b.score) ? [Math.max(0, Math.min(99, Number(b.score[0]) | 0)), Math.max(0, Math.min(99, Number(b.score[1]) | 0))] as [number, number] : null;
+  let error = '';
+  await getStore().update(r.t.code, (doc: Tournament) => {
+    const m = getMatch(doc, id);
+    if (!m) return null;
+    if (b.kind === 'start') {
+      // local: the two players moved to the host's device after the online link failed
+      if (m.status === 'live' && !(b.local && !m.local)) return null;
+      return markLive(m, b.local ? 'host' : undefined) ? doc : null;
+    }
+    if (b.kind === 'score') {
+      if (!sc || !markLive(m)) return null;
+      m.score = sc;
+      return doc;
+    }
+    if (b.kind === 'final') {
+      if (!sc) { error = 'Missing score.'; return null; }
+      if (m.status === 'done') return null;
+      const side = sc[0] > sc[1] ? 'a' : sc[1] > sc[0] ? 'b' : null;
+      if (!side || (b.winner && b.winner !== side)) { error = 'The score does not have a winner.'; return null; }
+      const e = applyResult(doc, id, side, sc, 'played');
+      if (e) { error = e; return null; }
+      return doc;
+    }
+    return null;
+  });
+  if (error) return fail(error, 409);
+  return json({ ok: true });
+}
