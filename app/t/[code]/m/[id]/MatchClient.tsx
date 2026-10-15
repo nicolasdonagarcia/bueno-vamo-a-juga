@@ -42,6 +42,7 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
   const { t, error } = useTournament(code, token, { enabled: idn.ready, every: 3000 });
   const m = matchOf(t, id);
   const [role, setRole] = useState<Role | null>(null);
+  const [notMine, setNotMine] = useState(false);     // someone else's match: only the organiser can watch
   const [resume, setResume] = useState<[number, number] | null>(null);
   const [touch, setTouch] = useState(false);
   const botSkill = BOTS_ALLOWED && bot ? Math.min(1, Math.max(0.1, Number(bot) || 0.7)) : 0;
@@ -55,6 +56,7 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     if (m.status !== 'ready' && m.status !== 'live') return;
     if (local) { if (idn.admin) { setResume(m.status === 'live' ? m.score : null); setRole('admin-local'); } return; }
     const r: Role = t.you && t.you === m.a ? (m.local ? 'host-local' : 'host') : t.you && t.you === m.b ? 'guest' : 'spectator';
+    if (r === 'spectator' && !idn.admin) { setNotMine(true); return; }
     if (r === 'host' || r === 'host-local') setResume(m.status === 'live' ? m.score : null);
     setRole(r);
   }, [role, t, m, token, local, idn.admin]);
@@ -76,7 +78,11 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     body = <Notice title={!t ? (error?.status === 404 ? 'No cup with the code ' + code : 'Could not load the match') : 'No such match'} text={error && !t ? error.message : 'Check the link and try again.'} href={'/t/' + code} />;
   } else if (!role) {
     if (local && !idn.admin) body = <Notice title="Organisers only" text="Running a match on this device needs the admin link of this cup." href={'/t/' + code} />;
-    else if (m.status === 'waiting') {
+    else if (notMine && m.status !== 'done') {
+      body = <Notice title="Not your match" text="Only the two players can open a match. Every match is on the organiser’s screen in the meeting." href={hubHref}>
+        <p className="vs-line"><PlayerChip p={pa} /> <span className="vs-x">vs</span> <PlayerChip p={pb} /></p>
+      </Notice>;
+    } else if (m.status === 'waiting') {
       body = <Notice title="Not ready yet" text="This match starts once both matches before it are finished." href={hubHref}>
         <p className="vs-line"><PlayerChip p={pa} fallback="To be decided" /> <span className="vs-x">vs</span> <PlayerChip p={pb} fallback="To be decided" /></p>
       </Notice>;
@@ -100,14 +106,14 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     body = reporter ? <LocalStage key={role} m={m} pa={pa} pb={pb} reporter={reporter} resumeScore={resume} nextLabel={nextLabel} onExit={back} full /> : <Loading />;
   } else {
     body = (
-      <MatchStage key={role} role={role} code={code} m={m} pa={pa} pb={pb} token={token} bot={botSkill || undefined}
+      <MatchStage key={role} role={role} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
         resumeScore={resume} nextLabel={nextLabel} serverResult={serverResult} full
         onExit={back} onEnded={botSkill ? back : undefined}
         onLocal={role === 'host' ? () => { setResume(m.status === 'live' ? m.score : null); setRole('host-local'); } : undefined} />
     );
   }
 
-  const hint = role === 'spectator' ? 'You’re watching · M toggles sound'
+  const hint = role === 'spectator' ? 'You’re watching as the organiser · M toggles sound'
     : role === 'host-local' || role === 'admin-local' ? (touch ? 'Each player taps their half of the pitch' : 'Esc pauses · M toggles sound')
       : role ? (touch ? 'Tap anywhere to jump and kick' : 'Space, W or ↑ jumps and kicks · A or D moves one player · M toggles sound') : '';
 

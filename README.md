@@ -5,10 +5,11 @@ One-button ragdoll football as a 1v1 knockout cup for the office. Everyone plays
 ## Running the cup in a 30-minute meeting
 
 1. **Before the meeting**, open the site and press **Start a cup**. You land on the admin page. Keep that link to yourself, because it starts the draw and changes results.
-2. **When the meeting starts**, open the **big screen** page from the admin page and share it. It shows a QR code, the code and everyone who has joined, with a CPU match playing while people arrive.
+2. **When the meeting starts**, open the **big screen** from the admin page and share that window in your video call (in Zoom, tick *Share sound* if you want the crowd noise). It shows a QR code, the code and everyone who has joined, with a CPU match playing while people arrive. Only the organiser can open it.
 3. **Everyone scans the QR code** and picks a name, a flag and a kit colour. While they wait, they can warm up against the CPU.
 4. **Press "Make the draw"** on the big screen or the admin page. Each player sees **Your match is ready → Play**. Both players press **I'm ready** and the match starts.
-5. **Results go in by themselves.** Winners see their next match appear as soon as their opponent is known. Live matches can be watched on the big screen, and the final comes up there automatically.
+5. **Every match is on the big screen at once**, in a grid. Click a match, or press its number, to fill the screen with it; **Esc** or **All matches** goes back, and ← → move between matches. Only the match filling the screen plays sound. **Bracket** at the top switches to the bracket; the matches stay connected behind it.
+6. **Results go in by themselves.** Winners see their next match appear as soon as their opponent is known. Players only open their own matches: everyone follows the rest on the shared screen.
 
 With 16 players there are 4 rounds. The default rules are:
 
@@ -28,7 +29,7 @@ In the worst case that is about 20 minutes of play, so it fits a 30-minute slot.
 | --- | --- |
 | Two players can't connect, usually on a locked-down office network | **The fix:** set up the free Cloudflare relay (see below). **On the day:** the left-hand player clicks **Play on this device** and both play side by side on one keyboard. Or the organiser presses **Play here** on the big screen. |
 | Someone doesn't turn up | Admin page → **Manage** on that match → *goes through* (walkover). |
-| A laptop drops out mid-match | The match pauses and picks up again when they reconnect. If the left-hand player reloads, the match carries on from the saved score. |
+| A laptop drops out mid-match | The match pauses and picks up again when they reconnect, usually within 10 seconds of their network coming back. If the left-hand player reloads, the match carries on from the saved score. |
 | A result is wrong | Admin page → **Manage** → enter the right score. This works until the next match has started. |
 | You want to start again | Admin page → **Back to the lobby** keeps the players and clears the bracket. |
 
@@ -38,14 +39,14 @@ In the worst case that is about 20 minutes of play, so it fits a 30-minute slot.
 2. On [vercel.com](https://vercel.com), choose **Add New → Project** and import the repository. The defaults are right: the framework is Next.js and there are no build settings to change.
 3. In the new project, open **Storage**. Pick **Upstash for Redis** from the Marketplace, create a database on the free plan and connect it to the project for all environments. This adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
 4. Redeploy (**Deployments → ⋯ → Redeploy**) so the app picks the variables up.
-5. **Strongly recommended for office networks:** set up a relay for players whose network blocks direct connections.
+5. **Strongly recommended:** set up a relay for players whose network blocks direct connections (office networks and VPNs, some home routers, phones on mobile data). You can check it is on: `/api/ice` on your site says `"relay":true`.
    1. In the Cloudflare dashboard, open **Realtime → TURN Server** and create a TURN key.
    2. In Vercel, add `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` under **Settings → Environment Variables**.
    3. Redeploy.
 
 Without step 3, the deployed app refuses to create cups and says why. Its fallback memory store would give every server instance its own copy of the data.
 
-**Usage:** a 16-player cup takes roughly 60,000 Redis commands, and Upstash's free plan allows 500,000 a month. Pages slow their polling once a cup is over or the tab is in the background.
+**Usage:** with 16 players and the big screen showing every match, the cup uses about 1,300 Redis commands a minute, so roughly 40,000 for a 30-minute meeting. Upstash's free plan allows 500,000 a month. Pages slow their polling once a cup is over or the tab is in the background.
 
 ## Running it locally
 
@@ -62,27 +63,38 @@ Without the Redis variables it keeps everything in memory, which is fine for one
 npm test                                   # bracket logic: seeding, byes, results, corrections
 ```
 
-The browser tests drive real Chromium windows: CPU bots join, connect peer to peer, play and report. They need Playwright (`npm i -D playwright`) and a build with the test switch on:
+The other tests need a running server. `test/api.mjs` only needs `npm run build && npm start`; it checks every API route with good and bad input, who may do what, and many requests at once. The browser tests drive real Chromium windows: CPU bots join, connect peer to peer, play and report. They need Playwright (`npm i -D playwright`) and a build with the test switch on:
 
 ```bash
 NEXT_PUBLIC_BOTS=1 npm run build && npm start
-PLAYERS=16 node test/e2e.mjs                # a whole cup, 8 matches at a time
-node test/scenarios.mjs                     # reloads, spectators, one-device matches, walkovers
+node test/api.mjs                           # every API route: input, permissions, simultaneous writes
+node test/features.mjs                      # every page and button: practice, create, admin, joining, the player page,
+                                            # keys, touch, mute, golden goal, time limits, phones, the big-screen lobby
+node test/scenarios.mjs                     # reloads, dropped connections, the organiser watching, one-device matches,
+                                            # walkovers, the big-screen grid, the dead-ball ring online
+PLAYERS=16 node test/e2e.mjs                # a whole cup, 8 matches at a time, every match on the big screen
+node test/rounds.mjs                        # every ball and crazy round, drawn and played
 BASE=http://localhost:3000 node test/smoke.mjs    # screenshots of every page
 node test/physics.mjs 120 6                 # CPU v CPU without drawing: goals, falls, jump heights, hop distances
 HOPS=1 node test/physics.mjs 0 8            # each man hopping at the peak of his sway, forward and back
+MODS=1 node test/physics.mjs 600 3          # crazy rounds on, a long soak
 ```
+
+To run them against Redis instead of the memory store, start the server with `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` set (a free Upstash database works).
 
 `?bot=0.7` only works in builds made with `NEXT_PUBLIC_BOTS=1`. That way nobody can let the CPU play for them in the real cup.
 
 ## How it is built
 
 - **Next.js 16 (App Router), React 19 and TypeScript.** Every page is a client component that polls `GET /api/t/{code}` every 2 seconds.
-- **`lib/engine/`** holds the match engine, which runs on [planck.js](https://piqnt.com/planck.js/) (a Box2D port). Each team has two men: the one nearest his own goal is the keeper (darker kit, gloves, number 1), who jumps higher. How far the men sway and how high the keeper jumps are set in `TUNE` at the top of `createGame`. The engine has these modes:
-  - `practice` and `local2p`: simulated on this device.
-  - `demo`: CPU against CPU.
-  - `host`: simulates and streams snapshots.
-  - `guest` and `spectator`: draw the host's snapshots.
+- **`lib/engine/`** holds the match engine, which runs on [planck.js](https://piqnt.com/planck.js/) (a Box2D port). Each team has two men: the one nearest his own goal is the keeper (darker kit, gloves, number 1), who jumps higher. How far the men sway and how high the keeper jumps are set in `TUNE` at the top of `createGame`.
+  - **Dead balls:** a ball lying still is dropped again from the sky after 7 seconds (`TUNE.deadT`). The wait runs at half speed while a man is right next to the ball (`nearRate`), so someone on his way can still save it. A ball stuck on a goal roof waits 2.5 seconds (`roofT`). In the last couple of seconds a gold ring winds down around the ball.
+  - **Own goals:** the banner says *Own goal* only when the scoring side hasn't touched the ball in the last 1.5 seconds (`OWN_T`), so a shot that brushes the keeper on its way in still counts as the shooter's goal.
+  - The engine has these modes:
+    - `practice` and `local2p`: simulated on this device.
+    - `demo`: CPU against CPU.
+    - `host`: simulates and streams snapshots.
+    - `guest` and `spectator`: draw the host's snapshots. Spectators are the organiser's big screen: watching needs the admin key, and each pitch in the grid can draw less often, at lower resolution, or not at all while another match fills the screen.
 - **`lib/net/link.js`** is the peer-to-peer link (WebRTC data channels).
   - The left-hand player (the host) runs the physics. It streams binary snapshots about 30 times a second on an unordered, no-retry channel, and events and button presses on a reliable one.
   - Signaling goes through small mailboxes in Redis (`/api/t/{code}/m/{id}/signal`). Each side gathers its network candidates in full first, so a connection needs exactly one offer and one answer.

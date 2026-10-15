@@ -39,7 +39,10 @@ for (const [i, name] of ['Alice', 'Bob', 'Chidi'].entries()) {
   phones.push(pg);
   if (i === 0) { await pg.waitForTimeout(800); await pg.screenshot({ path: OUT + '/phone-lobby.png', fullPage: true }); }
 }
+// the big screen is the organiser's: give that window the admin key this browser saved
+const key = await p.evaluate(c => localStorage.getItem('cc:admin:' + c), code);
 const big = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+await big.addInitScript(([c, k]) => localStorage.setItem('cc:admin:' + c, k), [code, key]);
 const sp = await big.newPage(); watch(sp, 'screen');
 await sp.goto(BASE + '/t/' + code + '/screen');
 await sp.waitForTimeout(2500);

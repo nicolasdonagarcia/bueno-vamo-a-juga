@@ -2,7 +2,8 @@
 /* One online match on this device.
    host       player A: runs the physics, connects to the guest and up to four viewers
    guest      player B: draws the host's snapshots and sends button presses
-   spectator  anyone else: draws the host's snapshots                              */
+   spectator  the organiser (needs the admin key): draws the host's snapshots,
+              usually as one tile of the big screen's grid                        */
 import { useEffect, useRef, useState } from 'react';
 import { Snd, resolveKits } from '@/lib/engine/shared';
 import { ApiError, BOTS_ALLOWED, api, getIce, rulesLine, sleep } from '@/lib/client';
@@ -27,12 +28,16 @@ type Ui = {
   save: 'idle' | 'saving' | 'saved' | 'error';
   saveMsg: string;
   waitedLong: boolean;
+  denied: boolean;
 };
 
 const INITIAL: Ui = {
   conn: 'connecting', rtt: null, relay: null, ready: [false, false], iAmReady: false, started: false, paused: false,
-  resumeAt: null, ended: null, stale: false, save: 'idle', saveMsg: '', waitedLong: false
+  resumeAt: null, ended: null, stale: false, save: 'idle', saveMsg: '', waitedLong: false, denied: false
 };
+
+// one pitch in a grid: draw every `every` frames (hidden: not at all), sound on or off, full resolution or not
+export type Tile = { every: number; sound: boolean; hidden: boolean; hd: boolean };
 
 type Props = {
   role: StageRole;
@@ -49,16 +54,21 @@ type Props = {
   onLocal?: () => void;            // host: move the match to this device
   onEnded?: () => void;            // called a few seconds after the result is on screen
   full?: boolean;
+  adminKey?: string | null;        // spectator: only the organiser can watch
+  tile?: Tile | null;              // one of the big screen's grid of matches
 };
 
 export default function MatchStage(p: Props) {
-  const { role, code, m, pa, pb } = p;
+  const { role, m, pa, pb } = p;
   const rootRef = useRef<HTMLDivElement>(null);
+  const gameRef = useRef<GameApi | null>(null);
+  const [gameOn, setGameOn] = useState(false);
   const [ui, setUi] = useState<Ui>(INITIAL);
   const act = useRef<{ ready: () => void }>({ ready: () => { } });
   const first = useRef(p);
   const me = role === 'host' ? 0 : role === 'guest' ? 1 : -1;
   const rules = m.rules;
+  const tile = p.tile || null;
 
   useEffect(() => {
     const P = first.current;
@@ -155,7 +165,8 @@ export default function MatchStage(p: Props) {
       if (dead || !rootRef.current) return;
       const players = [P.pa, P.pb].map(x => ({ name: x.name, color: x.color, flag: x.flag }));
       const gameRules = { goals: P.m.rules.goals, capSec: P.m.rules.capSec, modifiers: P.m.rules.modifiers };
-      const lite = P.bot ? { renderEvery: 3, maxDpr: 1 } : {};
+      const lite = P.tile ? { renderEvery: P.tile.hidden ? 1e9 : P.tile.every, maxDpr: P.tile.hd ? 2 : 1, sound: P.tile.sound }
+        : P.bot ? { renderEvery: 3, maxDpr: 1 } : {};
       const g = createGame(rootRef.current, {
         mode: role, players, rules: gameRules, bot: P.bot ? { skill: P.bot } : undefined, ...lite,
         hooks: {
@@ -171,11 +182,15 @@ export default function MatchStage(p: Props) {
         }
       });
       game = g;
+      gameRef.current = g;
+      setGameOn(true);
       g.setViewDelay(role === 'spectator' ? 160 : 70);
 
       const l = createLink({
-        code: P.code, matchId: P.m.id, role, token: P.token, iceServers: ice,
+        code: P.code, matchId: P.m.id, role, token: P.token, adminKey: P.adminKey || undefined, iceServers: ice,
         handlers: {
+          log: BOTS_ALLOWED ? (s: string) => console.debug('[link ' + role + '] ' + s) : undefined,     // test builds: what the link is doing
+          onDenied: () => set({ denied: true }),
           onOpen: (key: string) => {
             if (role === 'host') {
               l.send(g.getSync(), key);
@@ -199,6 +214,7 @@ export default function MatchStage(p: Props) {
                 clearTimeout(S.resumeTimer);
                 S.paused = true; g.setPaused(true);
                 set({ paused: true, resumeAt: null });
+                pushLobby();                       // the organiser's screen shows the pause too
               }
             } else set({ conn: 'lost' });
           },
@@ -229,7 +245,11 @@ export default function MatchStage(p: Props) {
         }
       });
       link = l;
-      if (BOTS_ALLOWED) (window as unknown as { __cc: unknown }).__cc = { game: g, link: l, role };   // test builds: let tests look inside
+      if (BOTS_ALLOWED) {                 // test builds: let tests look inside
+        const w = window as unknown as { __cc: unknown; __ccs?: Record<string, unknown> };
+        if (P.tile) (w.__ccs = w.__ccs || {})[P.m.id] = { game: g, link: l, role };
+        else w.__cc = { game: g, link: l, role };
+      }
       if (role === 'host' && P.bot) later(600, () => act.current.ready());
     })();
 
@@ -250,8 +270,20 @@ export default function MatchStage(p: Props) {
       window.removeEventListener('pointerdown', unlock);
       link?.close();
       game?.destroy();
+      gameRef.current = null;
+      if (BOTS_ALLOWED && P.tile) { const w = window as unknown as { __ccs?: Record<string, unknown> }; if (w.__ccs) delete w.__ccs[P.m.id]; }
     };
   }, [role]);
+
+  // a tile of the grid: how often to draw, sound, resolution
+  const tEvery = tile ? (tile.hidden ? 1e9 : tile.every) : 0, tSound = !!tile?.sound, tHd = !!tile?.hd;
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g || !tEvery) return;
+    g.setRenderEvery(tEvery);
+    g.setSound(tSound);
+    g.setMaxDpr(tHd ? 2 : 1);
+  }, [gameOn, tEvery, tSound, tHd]);
 
   // the server has a result this device never saw played out (the organiser decided it,
   // or the host finished and vanished): show it after a grace period
@@ -277,7 +309,10 @@ export default function MatchStage(p: Props) {
   const myHex = me === 0 ? kits.hexA : kits.hexB;
 
   let overlay: React.ReactNode = null;
-  if (ui.ended) {
+  if (role === 'spectator') {
+    overlay = <ViewerOverlay ui={ui} m={m} pa={pa} pb={pb} result={ui.ended ? null : serverEnd && sr && sr.winner ? sr : null}
+      nextLabel={p.nextLabel} tile={!!tile} onExit={p.onExit} />;
+  } else if (ui.ended) {
     overlay = <EndCard ui={ui} role={role} me={me} pa={pa} pb={pb} nextLabel={p.nextLabel} onExit={p.onExit} />;
   } else if (serverEnd && sr && sr.winner) {
     const w = sr.winner === pa.id ? pa : pb;
@@ -294,7 +329,7 @@ export default function MatchStage(p: Props) {
         <button type="button" className="btn" onClick={p.onExit}>Back to the bracket</button>
       </div></div>
     );
-  } else if (!ui.started && role !== 'spectator') {
+  } else if (!ui.started) {
     const myReady = ui.iAmReady;
     overlay = (
       <div className="ovl"><div className="card">
@@ -325,13 +360,6 @@ export default function MatchStage(p: Props) {
         )}
       </div></div>
     );
-  } else if (!ui.started && role === 'spectator') {
-    overlay = (
-      <div className="ovl soft"><div className="card tight">
-        {ui.conn === 'open' ? <span className="pill">Waiting for kick-off</span>
-          : <p className="status-line"><span className="spinner" aria-hidden="true" />{ui.waitedLong ? 'Still connecting. This match may already have four viewers.' : 'Connecting to the match…'}</p>}
-      </div></div>
-    );
   } else if (ui.paused || ui.resumeAt) {
     overlay = (
       <div className="ovl"><div className="card">
@@ -352,11 +380,60 @@ export default function MatchStage(p: Props) {
   }
 
   return (
-    <div className={'arena' + (p.full ? ' full' : '')}>
+    <div className={'arena' + (p.full ? ' full' : '') + (tile ? ' in-tile' + (tile.sound ? ' with-sound' : '') : '')}>
       <div ref={rootRef} className="wc-root" />
       {overlay}
     </div>
   );
+}
+
+// what the organiser sees over a match they watch (full page, or one tile of the grid)
+function ViewerOverlay({ ui, m, pa, pb, result, nextLabel, tile, onExit }: {
+  ui: Ui; m: PublicMatch; pa: PublicPlayer; pb: PublicPlayer; nextLabel?: string | null; tile: boolean; onExit: () => void;
+  result: { winner: string | null; score: [number, number]; via?: string } | null;
+}) {
+  const spin = <span className="spinner" aria-hidden="true" />;
+  if (ui.denied) {
+    return (
+      <div className="ovl"><div className="card tight">
+        <p className="lead">Only the organiser can watch matches.</p>
+        <p className="note small">Open the big screen from the admin page.</p>
+      </div></div>
+    );
+  }
+  const end = ui.ended ? { winner: ui.ended.winner === 0 ? pa : pb, score: ui.ended.score, via: 'played' }
+    : result && result.winner ? { winner: result.winner === pa.id ? pa : pb, score: result.score, via: result.via || 'played' } : null;
+  if (end) {
+    const how = end.via === 'played' || end.via === 'local' ? 'Full time' : end.via === 'walkover' ? 'Walkover' : 'Decided by the organiser';
+    return (
+      <div className="ovl"><div className={'card' + (tile ? ' tight tile-end' : ' end-card')}>
+        <p className="kicker">{m.label} · {how}</p>
+        <div className="final-score">
+          <PlayerChip p={pa} /><b>{end.via === 'walkover' ? 'W/O' : end.score[0] + ' – ' + end.score[1]}</b><PlayerChip p={pb} />
+        </div>
+        <p className="lead"><PlayerChip p={end.winner} /> {nextLabel === null ? 'wins the cup!' : 'goes through'}</p>
+        {!tile ? <button type="button" className="btn" onClick={onExit}>Back to the bracket</button> : null}
+      </div></div>
+    );
+  }
+  if (!ui.started) {
+    return (
+      <div className="ovl soft"><div className="card tight viewer-wait">
+        {ui.conn === 'open' ? (
+          <>
+            <span className="pill">Waiting for kick-off</span>
+            <div className="ready-row"><ReadyTag on={ui.ready[0]} name={pa.name} /><ReadyTag on={ui.ready[1]} name={pb.name} /></div>
+          </>
+        ) : <p className="status-line">{spin}{ui.waitedLong ? 'Waiting for ' + pa.name + ' to open the match' : 'Connecting…'}</p>}
+      </div></div>
+    );
+  }
+  if (ui.resumeAt) return <div className="ovl"><div className="card tight"><p className="kicker">Back on</p><Countdown at={ui.resumeAt} /></div></div>;
+  if (ui.paused) return <div className="ovl soft"><div className="card tight"><p className="status-line">{spin}Paused: {pb.name} lost the connection</p></div></div>;
+  if (ui.conn !== 'open' || ui.stale) {
+    return <div className="ovl soft"><div className="card tight"><p className="status-line">{spin}{ui.conn !== 'open' ? 'Reconnecting to ' + pa.name + '…' : 'Waiting for ' + pa.name + '…'}</p></div></div>;
+  }
+  return null;
 }
 
 function colourName(hex: string) {

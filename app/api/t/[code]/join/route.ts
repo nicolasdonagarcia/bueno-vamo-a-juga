@@ -3,7 +3,7 @@ import { getStore } from '@/lib/store';
 import { MAX_PLAYERS, cleanName, type Tournament } from '@/lib/tournament';
 import { COLORS } from '@/lib/engine/shared';
 import { FLAG_CODES } from '@/lib/flags';
-import { body, fail, hash, id, json, loadOr404, playerByToken, secret } from '@/lib/server';
+import { body, busy, fail, hash, id, json, loadOr404, playerByToken, secret } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +33,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
     playerId = id();
     doc.players.push({ id: playerId, name: uniqueName(doc, name, ''), flag, color, tokenHash: hash(token), joinedAt: Date.now() });
     return doc;
-  });
+  }).catch(() => undefined);
+  if (t === undefined) return busy();
   if (error) return fail(error, 409);
   if (!t) return fail('No tournament with that code.', 404);
   return json({ playerId, token });

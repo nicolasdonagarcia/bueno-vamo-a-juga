@@ -1,7 +1,7 @@
 // Admin actions, authorised by the admin key from the creation link.
 import { getStore } from '@/lib/store';
 import { applyResult, buildBracket, cleanName, getMatch, markLive, resetMatch, type Tournament } from '@/lib/tournament';
-import { body, fail, isAdmin, json, loadOr404 } from '@/lib/server';
+import { body, busy, fail, isAdmin, json, loadOr404 } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +89,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         error = 'Unknown action.';
         return null;
     }
-  });
+  }).catch(() => undefined);
+  if (t === undefined) return busy();
   if (error) return fail(error, 409);
   if (!t) return fail('No tournament with that code.', 404);
   return json({ ok: true });

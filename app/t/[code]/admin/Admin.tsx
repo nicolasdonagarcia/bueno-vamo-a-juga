@@ -59,6 +59,7 @@ export default function Admin({ code }: { code: string }) {
               <div className="row"><CopyButton text={playerUrl} label="Copy player link" /></div>
               <p className="field-label">Big screen for the meeting</p>
               <div className="row"><a className="btn small" href={'/t/' + code + '/screen'} target="_blank" rel="noreferrer">Open the big screen</a></div>
+              <p className="note small">Share it in your video call: the QR code while people join, then every match live in a grid. Click a match to fill the screen. Only you can open it.</p>
               <p className="field-label">This admin page</p>
               <div className="row"><CopyButton text={adminUrl} label="Copy admin link" /></div>
               <p className="note small">Keep the admin link to yourself: it starts the draw and changes results.</p>

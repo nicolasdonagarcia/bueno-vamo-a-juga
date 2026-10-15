@@ -1,47 +1,113 @@
 'use client';
-// The big screen for the meeting: QR code and arrivals, then the live bracket,
-// live matches to watch, and the champion.
-import { useEffect, useState } from 'react';
+// The organiser's big screen, made to be shared in the meeting's video call:
+// the QR code and arrivals, then every match live in a grid (click one to fill
+// the screen, Esc to go back), the bracket, and the champion. Watching matches
+// needs the admin key, so only the organiser can open it.
+import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bracket } from '@/components/Bracket';
 import GameView from '@/components/GameView';
 import MatchStage from '@/components/MatchStage';
-import { Brand, Flag, Loading, PlayerChip, QR } from '@/components/bits';
-import { Trophy } from '@/components/Trophy';
-import { api, playerOf, rulesLine, useIdentity, useTournament, type View } from '@/lib/client';
-import { roundName } from '@/lib/tournament';
+import { Brand, Loading, PlayerChip, QR } from '@/components/bits';
+import { ChampionBanner } from '@/components/Champion';
+import { ApiError, api, playerOf, rulesLine, useIdentity, useTournament, type View } from '@/lib/client';
+import { roundName, type PublicMatch } from '@/lib/tournament';
 import { Snd } from '@/lib/engine/shared';
+
+const KEEP_MS = 20000;            // a finished match stays in the grid this long, so its result can be seen
+const GAP = 12, TILE_HEAD = 46;   // px, as in the CSS below the grid
 
 export default function Screen({ code }: { code: string }) {
   const idn = useIdentity(code);
-  const { t, error, refresh } = useTournament(code, null, { enabled: idn.ready, every: 1500 });
-  const [watch, setWatch] = useState<string | null>(null);
-  const [finalDismissed, setFinalDismissed] = useState(false);
+  const { setAdmin } = idn;
+  const key = idn.admin;
+  const [keyState, setKeyState] = useState<'unknown' | 'ok' | 'bad'>('unknown');
+  const { t, error, refresh } = useTournament(code, null, { enabled: idn.ready && !!key && keyState !== 'bad', every: 1500 });
+  const [tab, setTab] = useState<'matches' | 'bracket'>('matches');
+  const [maxId, setMaxId] = useState<string | null>(null);
   const [origin, setOrigin] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
 
-  useEffect(() => { setOrigin(window.location.origin); }, []);
-  // the final goes on screen by itself
+  // an admin link (#k=…) opened here works too
   useEffect(() => {
-    if (!t || watch || finalDismissed || t.status !== 'running') return;
-    const f = t.matches.find(m => m.round === t.rounds);
-    if (f && f.status === 'live' && !f.local) setWatch(f.id);
-  }, [t, watch, finalDismissed]);
+    setOrigin(window.location.origin);
+    const mk = /[#&]k=([^&]+)/.exec(window.location.hash);
+    if (mk) {
+      setAdmin(decodeURIComponent(mk[1]));
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, [setAdmin]);
+  useEffect(() => {
+    if (!key) return;
+    let live = true;
+    api('/api/t/' + code + '/admin', { key, action: 'check' })
+      .then(() => { if (live) setKeyState('ok'); })
+      .catch(e => { if (live) setKeyState(e instanceof ApiError && e.status === 403 ? 'bad' : 'ok'); });
+    return () => { live = false; };
+  }, [key, code]);
 
+  // the server's clock, ticking between answers (finished matches leave the grid after KEEP_MS)
+  const [since, setSince] = useState(0);
+  useEffect(() => {
+    const at = Date.now();
+    const iv = setInterval(() => setSince(Date.now() - at), 1000);
+    return () => { clearInterval(iv); setSince(0); };
+  }, [t]);
+  const serverNow = t ? t.now + since : 0;
+
+  const tiles = useMemo(() => !t || t.status === 'lobby' ? [] : t.matches.filter(m => !!m.a && !!m.b && (
+    m.status === 'ready' || m.status === 'live' || (m.status === 'done' && m.via !== 'bye' && !!m.endedAt && serverNow - m.endedAt < KEEP_MS))),
+  [t, serverNow]);
+  const tileIds = tiles.map(m => m.id).join(',');
+  const maxed = maxId && tiles.some(m => m.id === maxId) ? maxId : null;
+  const showGrid = tab === 'matches' && tiles.length > 0;
+
+  // Esc goes back to the grid, ← → move between matches, 1-9 open one
+  useEffect(() => {
+    if (!showGrid) return;
+    const ids = tileIds.split(',');
+    const h = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (e.key === 'Escape' && maxed) { setMaxId(null); return; }
+      if (maxed && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        const i = ids.indexOf(maxed), n = ids.length;
+        setMaxId(ids[(i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n]);
+        return;
+      }
+      if (/^[1-9]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const id = ids[Number(e.key) - 1];
+        if (id) setMaxId(id);
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [showGrid, maxed, tileIds]);
+
+  if (!idn.ready) return <main className="screen"><div className="screen-center"><Loading /></div></main>;
+  if (!key || keyState === 'bad') {
+    return (
+      <main className="screen">
+        <div className="screen-center">
+          <div className="card stack narrow-card">
+            <h1 className="h2">This screen is for the organiser</h1>
+            <p className="note">{keyState === 'bad' ? 'The admin key saved in this browser doesn’t match this cup. ' : ''}It shows every match live, so it opens from the admin page: use your admin link, then press <b>Open the big screen</b>.</p>
+            <div className="row"><Link className="btn" href={'/t/' + code + '/admin'}>Admin page</Link><Link className="btn ghost" href={'/t/' + code}>Player page</Link></div>
+          </div>
+        </div>
+      </main>
+    );
+  }
   if (!t) {
     return <main className="screen"><div className="screen-center">{error ? <p className="lead">{error.status === 404 ? 'No cup with the code ' + code : error.message}</p> : <Loading text="Loading the cup…" />}</div></main>;
   }
 
   const joinUrl = (origin || '') + '/t/' + code;
-  const watched = watch ? t.matches.find(m => m.id === watch) : null;
-  const closeWatch = () => {
-    if (watched && watched.round === t.rounds) setFinalDismissed(true);
-    setWatch(null);
-  };
   async function start() {
-    if (!idn.admin) return;
+    if (!key) return;
     setBusy(true); setActionError('');
-    try { await api('/api/t/' + code + '/admin', { key: idn.admin, action: 'start' }); await refresh(); }
+    try { await api('/api/t/' + code + '/admin', { key, action: 'start' }); await refresh(); }
     catch (e) { setActionError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
@@ -57,7 +123,7 @@ export default function Screen({ code }: { code: string }) {
           </div>
           <div className="lobby-count">
             <p className="arrivals"><b>{t.players.length}</b> {t.players.length === 1 ? 'player' : 'players'} in</p>
-            {idn.admin ? <button type="button" className="btn big" onClick={start} disabled={busy || t.players.length < 2}>{busy ? 'Drawing…' : 'Make the draw'}</button> : null}
+            <button type="button" className="btn big" onClick={start} disabled={busy || t.players.length < 2}>{busy ? 'Drawing…' : 'Make the draw'}</button>
             {actionError ? <p className="error">{actionError}</p> : null}
           </div>
         </section>
@@ -84,38 +150,121 @@ export default function Screen({ code }: { code: string }) {
     );
   }
 
-  if (watched && !watched.local) {
-    const pa = playerOf(t, watched.a), pb = playerOf(t, watched.b);
-    if (pa && pb) {
-      return (
-        <main className="screen watching">
-          <header className="screen-head">
-            <Brand name={t.name} href={'/t/' + code} />
-            <p className="watch-title"><span className="pill live">{watched.label}</span> <PlayerChip p={pa} /> <span className="vs-x">vs</span> <PlayerChip p={pb} /></p>
-            <button type="button" className="btn ghost small" onClick={closeWatch}>Back to the bracket</button>
-          </header>
-          <MatchStage key={watched.id} role="spectator" code={code} m={watched} pa={pa} pb={pb} token={null}
-            nextLabel={watched.round < t.rounds ? roundName(watched.round + 1, t.rounds) : null}
-            serverResult={watched.status === 'done' ? { winner: watched.winner, score: watched.score, via: watched.via } : null}
-            onExit={closeWatch} onEnded={closeWatch} full />
-        </main>
-      );
-    }
-  }
-
-  return (
-    <main className="screen">
-      <header className="screen-head">
-        <Brand name={t.name} href={'/t/' + code} />
-        <ProgressLine t={t} />
+  const head = (
+    <header className="screen-head">
+      <Brand name={t.name} href={'/t/' + code} />
+      <ProgressLine t={t} />
+      <div className="row">
+        {tiles.length ? (
+          <div className="seg" role="radiogroup" aria-label="Show">
+            <button type="button" role="radio" aria-checked={showGrid} onClick={() => setTab('matches')}>Matches · {tiles.length}</button>
+            <button type="button" role="radio" aria-checked={!showGrid} onClick={() => setTab('bracket')}>Bracket</button>
+          </div>
+        ) : null}
         <span className="pill code-pill">Code {code}</span>
-      </header>
-      {t.status === 'finished' ? <Champion t={t} /> : null}
-      <Bracket t={t} big fill={t.status === 'running'} onWatch={m => { Snd.unlock(); setWatch(m.id); }} showOnline
-        localHref={idn.admin ? m => (m.status === 'ready' || (m.status === 'live' && m.local === 'admin')) ? '/t/' + code + '/m/' + m.id + '?local=1&from=screen' : null : undefined} />
-      {t.status === 'running' ? <p className="tiny muted center">Live matches show a Watch button. The final appears here on its own.</p> : null}
+      </div>
+    </header>
+  );
+
+  // the grid stays mounted behind the bracket, so its matches stay connected
+  return (
+    <main className={'screen' + (showGrid ? ' grid-mode' : '')}>
+      {head}
+      {tiles.length ? <MatchGrid t={t} code={code} adminKey={key} tiles={tiles} shown={showGrid} maxed={maxed} setMax={id => { Snd.unlock(); setMaxId(id); }} /> : null}
+      {showGrid ? <p className="tiny muted center grid-hint">{tiles.length < 2 ? ' ' : maxed ? 'Esc or the button goes back to all matches · ← → switch match' : 'Click a match to fill the screen · or press its number'}</p> : (
+        <>
+          {t.status === 'finished' ? <ChampionBanner t={t} /> : null}
+          <Bracket t={t} big fill={t.status === 'running'} onWatch={m => { setTab('matches'); setMaxId(m.id); Snd.unlock(); }} showOnline
+            localHref={m => (m.status === 'ready' || (m.status === 'live' && m.local === 'admin')) ? '/t/' + code + '/m/' + m.id + '?local=1&from=screen' : null} />
+          {t.status === 'running' ? <p className="tiny muted center">{tiles.length ? 'Matches shows every match being played.' : 'Matches show up here as soon as both players are known.'}</p> : null}
+        </>
+      )}
     </main>
   );
+}
+
+// every match being played, as tiles that share the screen; one can fill it
+function MatchGrid({ t, code, adminKey, tiles, shown, maxed, setMax }: {
+  t: View; code: string; adminKey: string; tiles: PublicMatch[]; shown: boolean; maxed: string | null; setMax: (id: string | null) => void;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const n = tiles.length;
+  const cols = maxed ? 1 : bestCols(n, box.w, box.h);
+  const every = n <= 1 ? 1 : n <= 9 ? 2 : 3;    // draw less often when many pitches share the screen
+  const mixed = new Set(tiles.map(m => m.round)).size > 1;   // the header already names the round otherwise
+  return (
+    <section ref={ref} className={'match-grid' + (maxed ? ' has-max' : '')} hidden={!shown} style={{ gridTemplateColumns: 'repeat(' + cols + ', minmax(0, 1fr))' }} aria-label="Matches">
+      {tiles.map((m, i) => {
+        const pa = playerOf(t, m.a), pb = playerOf(t, m.b);
+        if (!pa || !pb) return null;
+        const isMax = maxed === m.id, hidden = !!maxed && !isMax;
+        const big = shown && (isMax || n === 1);
+        return (
+          <article key={m.id} className={'tile' + (m.status === 'live' ? ' live' : '') + (isMax ? ' max' : '')} hidden={hidden} aria-label={m.label + ': ' + pa.name + ' vs ' + pb.name}>
+            <header className="tile-head">
+              {!maxed && n > 1 ? <span className="tile-num" aria-hidden="true">{i + 1}</span> : null}
+              <span className={'pill' + (m.status === 'live' ? ' live' : m.status === 'done' ? ' ok' : '')}>
+                {m.status === 'done' ? 'Full time' : mixed || n === 1 ? m.label : m.status === 'live' ? 'Live' : 'Ready'}
+              </span>
+              <span className="tile-names"><PlayerChip p={pa} /><span className="vs-x">vs</span><PlayerChip p={pb} /></span>
+              {n > 1 ? (
+                <button type="button" className={'tile-btn' + (isMax ? ' on' : '')} onClick={() => setMax(isMax ? null : m.id)}
+                  aria-label={isMax ? 'Back to all matches' : 'Fill the screen with this match'} title={isMax ? 'Back to all matches (Esc)' : 'Fill the screen'}>
+                  {isMax ? <><ShrinkIcon /><span>All matches</span></> : <GrowIcon />}
+                </button>
+              ) : null}
+            </header>
+            <div className={'tile-body' + (!isMax && n > 1 ? ' can-grow' : '')} onClick={!isMax && n > 1 ? () => setMax(m.id) : undefined}>
+              {m.local ? <LocalTile m={m} pa={pa.name} /> : (
+                <MatchStage key={m.id} role="spectator" code={code} m={m} pa={pa} pb={pb} token={null} adminKey={adminKey}
+                  nextLabel={m.round < t.rounds ? roundName(m.round + 1, t.rounds) : null}
+                  serverResult={m.status === 'done' ? { winner: m.winner, score: m.score, via: m.via } : null}
+                  tile={{ every: big ? 1 : every, sound: big, hidden: hidden || !shown, hd: big }} onExit={() => setMax(null)} />
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+// the column count that gives each pitch (1060×720) the most room
+function bestCols(n: number, w: number, h: number) {
+  if (n <= 1) return 1;
+  if (!w || !h) return Math.ceil(Math.sqrt(n));
+  let best = 1, bestScale = 0;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c);
+    const cw = (w - (c - 1) * GAP) / c, ch = (h - (r - 1) * GAP) / r - TILE_HEAD;
+    const s = Math.min(cw / 1060, ch / 720);
+    if (s > bestScale + 1e-6) { bestScale = s; best = c; }
+  }
+  return best;
+}
+
+function LocalTile({ m, pa }: { m: PublicMatch; pa: string }) {
+  return (
+    <div className="tile-static">
+      <p className="final-score"><b>{m.score[0]} – {m.score[1]}</b></p>
+      <p className="note">{m.local === 'admin' ? 'Being played on the organiser’s screen' : 'Being played side by side on ' + pa + '’s device'}, so it can’t be shown here.</p>
+    </div>
+  );
+}
+
+function GrowIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
+}
+function ShrinkIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>;
 }
 
 function ProgressLine({ t }: { t: View }) {
@@ -131,40 +280,5 @@ function ProgressLine({ t }: { t: View }) {
       <span className="muted">{done} of {inRound.length} played</span>
       {live ? <span className="pill live">{live} live</span> : null}
     </p>
-  );
-}
-
-function Champion({ t }: { t: View }) {
-  const c = playerOf(t, t.champion);
-  const final = t.matches.find(m => m.round === t.rounds);
-  const other = final ? playerOf(t, final.a === t.champion ? final.b : final.a) : null;
-  const sc = final ? (final.a === t.champion ? final.score : [final.score[1], final.score[0]]) : null;
-  if (!c) return null;
-  return (
-    <section className="champion-screen" aria-label="Champion">
-      <Confetti />
-      <Trophy className="trophy big" title={t.name} />
-      <div className="stack tight-stack center">
-        <p className="kicker">Winner of {t.name}</p>
-        <h1 className="title champ-name"><Flag code={c.flag} /> {c.name}</h1>
-        {other && sc ? <p className="lead">Beat {other.name} {sc[0]}–{sc[1]} in the final</p> : null}
-      </div>
-    </section>
-  );
-}
-
-function Confetti() {
-  const colours = ['#ffd43b', '#ff7a1a', '#14b8cc', '#ff5ca8', '#59e08f', '#8e5cf7'];
-  const bits = Array.from({ length: 36 }, (_, i) => i);
-  return (
-    <div className="confetti" aria-hidden="true">
-      {bits.map(i => (
-        <i key={i} style={{
-          left: ((i * 37) % 100) + '%', background: colours[i % colours.length],
-          animationDelay: ((i * 0.23) % 4).toFixed(2) + 's', animationDuration: (3.2 + ((i * 7) % 10) / 6).toFixed(2) + 's',
-          transform: 'rotate(' + (i * 47) + 'deg)'
-        }} />
-      ))}
-    </div>
   );
 }

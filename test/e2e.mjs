@@ -5,7 +5,9 @@
 //
 // Needs Playwright (npm i -D playwright, or NODE_PATH pointing at an install).
 // Env: BASE (http://localhost:3000), PLAYERS (4), GOALS (2), CAP (60), SKILL (0.7),
-//      CHROME (path to a Chromium binary), OUT (screenshot folder), WATCH=1 (big screen spectates)
+//      CHROME (path to a Chromium binary), OUT (screenshot folder), WATCH=0 (no big screen)
+// The organiser's big screen shows every match in a grid: each live match has to
+// show up there, and one is made to fill the screen once.
 import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 const { chromium } = createRequire(import.meta.url)('playwright');
@@ -56,6 +58,7 @@ for (let k = 0; k < 60; k++) {
 let screen = null;
 if (process.env.WATCH !== '0') {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  await ctx.addInitScript(([c, k]) => localStorage.setItem('cc:admin:' + c, JSON.stringify(k)), [code, adminKey]);   // the organiser's browser
   screen = await ctx.newPage();
   screen.on('pageerror', e => problems.push('screen: ' + e.message));
   await screen.goto(BASE + '/t/' + code + '/screen');
@@ -63,31 +66,35 @@ if (process.env.WATCH !== '0') {
 await call('/api/t/' + code + '/admin', { key: adminKey, action: 'start' });
 console.log(stamp(), 'draw made');
 
-let last = '', v = null, watched = false, shots = 0;
+let last = '', v = null, shots = 0, gridShot = false, maxShot = false;
+const liveSince = new Map(), shown = new Map();      // match id -> when it went live / how long until the big screen had it
 while (Date.now() - t0 < LIMIT_MS) {
   v = await call('/api/t/' + code);
   const line = v.matches.map(m => m.id + ':' + m.status[0] + (m.status === 'live' || m.status === 'done' ? m.score.join('-') : '')).join(' ');
   if (line !== last) { console.log(stamp(), line); last = line; }
   if (v.status === 'finished') break;
-  // the big screen watches the first live match it sees, once
-  const live = v.matches.find(m => m.status === 'live' && !m.local);
-  if (screen && live && !watched) {
-    watched = true;
+  // the big screen: every live match should appear in its grid
+  if (screen) {
     try {
-      await sleep(2000);
-      // the final goes up on the big screen by itself; earlier rounds need a click
-      if (live.round !== v.rounds) await screen.getByRole('button', { name: 'Watch' }).first().click({ timeout: 8000 });
-      let waited = 0, connected = false;
-      for (; waited < 30 && !connected; waited++) {
+      const live = v.matches.filter(m => m.status === 'live' && !m.local).map(m => m.id);
+      for (const id of live) if (!liveSince.has(id)) liveSince.set(id, Date.now());
+      const fresh = await screen.evaluate(ids => ids.filter(id => window.__ccs && window.__ccs[id] && window.__ccs[id].game.lastFrameAge < 1500), live);
+      for (const id of fresh) if (!shown.has(id)) { shown.set(id, Math.round((Date.now() - liveSince.get(id)) / 1000)); console.log(stamp(), 'big screen shows', id, '(' + shown.get(id) + 's after kick-off)'); }
+      if (!gridShot && live.length >= 2 && fresh.length === live.length) {
         await sleep(1000);
-        connected = await screen.evaluate(() => !!(window.__cc && window.__cc.game.lastFrameAge < 1000));
+        await screen.screenshot({ path: OUT + '/screen-grid.png' });
+        gridShot = true;
+      } else if (gridShot && !maxShot && fresh.length >= 2) {
+        await screen.getByRole('button', { name: 'Fill the screen with this match' }).first().click({ timeout: 5000 });
+        await sleep(1500);
+        if ((await screen.locator('.tile:not([hidden])').count()) !== 1) problems.push('maximize did not hide the other matches');
+        await screen.screenshot({ path: OUT + '/screen-max.png' });
+        await screen.keyboard.press('Escape');
+        await sleep(500);
+        if ((await screen.locator('.tile.max').count()) !== 0) problems.push('Esc did not bring the grid back');
+        maxShot = true;
       }
-      await sleep(1500);
-      await screen.screenshot({ path: OUT + '/screen-watching.png' });
-      console.log(stamp(), 'big screen watching', live.id, connected ? 'connected after ' + waited + 's' : 'NOT connected after 30s');
-      if (!connected) problems.push('big screen could not watch ' + live.id);
-      if (live.round !== v.rounds) await screen.getByRole('button', { name: 'Back to the bracket' }).first().click({ timeout: 5000 });
-    } catch (e) { problems.push('watch: ' + e.message.split('\n')[0]); }
+    } catch (e) { problems.push('big screen: ' + e.message.split('\n')[0]); }
   }
   if (shots < 1 && v.matches.some(m => m.status === 'live')) {
     const hostPage = pages.find(p => p.url().includes('/m/'));
@@ -95,7 +102,17 @@ while (Date.now() - t0 < LIMIT_MS) {
   }
   await sleep(3000);
 }
-if (screen) { await sleep(2500); await screen.screenshot({ path: OUT + '/screen-final.png' }); }
+if (screen) {
+  await sleep(2500);
+  await screen.screenshot({ path: OUT + '/screen-final.png' });
+  // a match only counts as missed if it was live long enough for a tile to connect
+  for (const m of v.matches) {
+    if (m.via !== 'played' || shown.has(m.id) || !m.startedAt || !m.endedAt) continue;
+    if (m.endedAt - m.startedAt > 25000) problems.push('big screen never showed ' + m.id);
+  }
+  const waits = [...shown.values()];
+  if (waits.length) console.log(stamp(), 'big screen showed', waits.length, 'matches; seconds after kick-off: max', Math.max(...waits), 'median', waits.sort((a, b) => a - b)[waits.length >> 1]);
+}
 
 const players = Object.fromEntries(v.players.map(p => [p.id, p.name]));
 const played = v.matches.filter(m => m.via === 'played');

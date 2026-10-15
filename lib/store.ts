@@ -45,14 +45,15 @@ function redisStore(url: string, token: string): Store {
       return s ? JSON.parse(s) as Tournament : null;
     },
     async update(code, fn) {
-      for (let attempt = 0; attempt < 10; attempt++) {
+      // compare-and-swap: another writer got in first, so wait a little (longer each time) and redo it
+      for (let attempt = 0; attempt < 30; attempt++) {
         const [s, v] = await r.mget<[string | null, string | null]>(dk(code), vk(code));
         if (!s || !v) return null;
         const next = fn(JSON.parse(s) as Tournament);
         if (!next) return JSON.parse(s) as Tournament;
         const ok = await r.eval(CAS, [dk(code), vk(code)], [v, JSON.stringify(next), String(DOC_TTL)]);
         if (Number(ok) === 1) return next;
-        await new Promise(res => setTimeout(res, 15 + Math.random() * 60));
+        await new Promise(res => setTimeout(res, (10 + Math.random() * 40) * Math.min(attempt + 1, 6)));
       }
       throw new Error('busy');
     },

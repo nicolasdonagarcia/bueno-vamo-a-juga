@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import GameView from './GameView';
 import { Snd } from '@/lib/engine/shared';
-import { saved } from '@/lib/client';
+import { BOTS_ALLOWED, saved } from '@/lib/client';
 import type { GameApi } from '@/lib/engine/types';
 
 const LEVELS = [
@@ -76,7 +76,11 @@ export default function PracticeArena({ full, me }: { full?: boolean; me?: { nam
             onEndShown: (e) => { setTimeout(() => { setResult({ winner: e.winner, score: e.score }); setPhase('end'); }, 2200); },
             onPauseKey: () => togglePause()
           }
-        }} onGame={g => { game.current = g; setLoaded(true); return () => { if (game.current === g) game.current = null; }; }} />
+        }} onGame={g => {
+          game.current = g; setLoaded(true);
+          if (BOTS_ALLOWED) (window as unknown as { __practice: unknown }).__practice = g;     // test builds: let tests look inside
+          return () => { if (game.current === g) game.current = null; };
+        }} />
         {phase === 'pre' ? (
           <div className="ovl"><div className="card">
             <p className="kicker">{mode === 'local2p' ? 'Two players, one device' : 'Practice match'} · first to 3</p>

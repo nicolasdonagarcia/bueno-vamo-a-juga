@@ -8,7 +8,7 @@ import { Bracket } from '@/components/Bracket';
 import JoinForm from '@/components/JoinForm';
 import PracticeArena from '@/components/PracticeArena';
 import { Brand, Loading, PlayerChip } from '@/components/bits';
-import { Trophy } from '@/components/Trophy';
+import { ChampionBanner } from '@/components/Champion';
 import { BOTS_ALLOWED, api, myStatus, playerOf, rulesLine, useIdentity, useTournament, type MyStatus, type View } from '@/lib/client';
 import { COLORS, Snd } from '@/lib/engine/shared';
 import { FLAG_LIST } from '@/lib/flags';
@@ -90,9 +90,10 @@ export default function Hub({ code, bot, botName }: { code: string; bot: string;
   }
 
   const mine = playerOf(t, me);
+  // only your own matches open from here: the organiser shows all of them on the big screen
   const hrefFor = (m: PublicMatch) => {
     if (m.status !== 'ready' && m.status !== 'live') return null;
-    if (m.local && m.a !== me && m.b !== me) return null;
+    if (!me || (m.a !== me && m.b !== me)) return null;
     return '/t/' + code + '/m/' + m.id + botQ;
   };
 
@@ -135,9 +136,10 @@ export default function Hub({ code, bot, botName }: { code: string; bot: string;
         )
       ) : (
         <div className="stack">
-          {mine ? <StatusCard t={t} code={code} status={status} botQ={botQ} /> : (
-            <div className="card"><p className="note">The draw has been made, so entries are closed. You can still follow along and watch live matches.</p></div>
-          )}
+          {t.status === 'finished' ? <ChampionBanner t={t} me={me} />
+            : mine ? <StatusCard t={t} code={code} status={status} botQ={botQ} /> : (
+              <div className="card"><p className="note">The draw has been made, so entries are closed. You can follow the bracket here; the organiser shows the matches on the big screen.</p></div>
+            )}
           <section className="stack" aria-label="Bracket">
             <div className="spread"><h2 className="h3">The bracket</h2><span className="tiny muted">{rulesLine(t.rules)} · final: first to {t.rules.finalGoals}</span></div>
             <Bracket t={t} me={me} hrefFor={hrefFor} />
@@ -200,7 +202,7 @@ function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: 
         <h1 className="h2">{status.m.round > 1 ? 'You’re through!' : 'Waiting for your opponent'}</h1>
         {f ? (
           <p className="lead">You’ll play the winner of <PlayerChip p={fa} /> vs <PlayerChip p={fb} />
-            {f.status === 'live' ? <> · <span className="pill live">{f.score[0]}–{f.score[1]}</span> <Link href={'/t/' + code + '/m/' + f.id}>Watch</Link></> : f.status === 'ready' ? ' · about to start' : ''}
+            {f.status === 'live' ? <> · <span className="pill live">{f.score[0]}–{f.score[1]}</span></> : f.status === 'ready' ? ' · about to start' : ''}
           </p>
         ) : <p className="note">Waiting for the other match to finish.</p>}
       </div>
@@ -215,27 +217,9 @@ function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: 
       <div className="card status-card">
         <p className="kicker">{m.label}</p>
         <h1 className="h2">Knocked out</h1>
-        <p className="lead">{m.via === 'walkover' ? <>The match went to <PlayerChip p={by} /></> : <>Beaten by <PlayerChip p={by} /> {sc[0]}–{sc[1]}</>}. Stick around and watch who lifts the cup.</p>
+        <p className="lead">{m.via === 'walkover' ? <>The match went to <PlayerChip p={by} /></> : <>Beaten by <PlayerChip p={by} /> {sc[0]}–{sc[1]}</>}. Stick around and watch who lifts the cup on the big screen.</p>
       </div>
     );
   }
-  if (status.kind === 'champion') {
-    return (
-      <div className="card status-card champion">
-        <Trophy className="trophy" />
-        <h1 className="h2">You won {t.name}!</h1>
-        <p className="lead">Final: {status.m.score[0]}–{status.m.score[1]}. Enjoy it.</p>
-      </div>
-    );
-  }
-  if (t.status === 'finished') {
-    const c = playerOf(t, t.champion);
-    return (
-      <div className="card status-card champion">
-        <Trophy className="trophy" />
-        <h1 className="h2">{c ? c.name + ' won the cup' : 'The cup is over'}</h1>
-      </div>
-    );
-  }
-  return null;
+  return null;     // the champion and everyone else see the champion banner once the cup is over
 }

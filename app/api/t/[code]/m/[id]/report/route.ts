@@ -1,7 +1,7 @@
 // The match host (left-hand player) reports kick-off, every goal and the result.
 import { getStore } from '@/lib/store';
 import { applyResult, getMatch, markLive, type Tournament } from '@/lib/tournament';
-import { body, fail, json, loadOr404, playerByToken } from '@/lib/server';
+import { body, busy, fail, json, loadOr404, playerByToken } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +16,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string; 
   if (!me || me.id !== m0.a) return fail('Only the match host can report.', 403);
   const sc = Array.isArray(b.score) ? [Math.max(0, Math.min(99, Number(b.score[0]) | 0)), Math.max(0, Math.min(99, Number(b.score[1]) | 0))] as [number, number] : null;
   let error = '';
-  await getStore().update(r.t.code, (doc: Tournament) => {
+  const t = await getStore().update(r.t.code, (doc: Tournament) => {
     const m = getMatch(doc, id);
     if (!m) return null;
     if (b.kind === 'start') {
@@ -39,7 +39,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string; 
       return doc;
     }
     return null;
-  });
+  }).catch(() => undefined);
+  if (t === undefined) return busy();
   if (error) return fail(error, 409);
   return json({ ok: true });
 }

@@ -26,6 +26,7 @@ export type GameOpts = {
   hooks?: GameHooks;
   renderEvery?: number;
   maxDpr?: number;
+  sound?: boolean;
   demoSound?: boolean;
   input?: boolean;
 };

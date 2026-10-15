@@ -19,6 +19,8 @@ export function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 export function fail(message: string, status = 400) { return json({ error: message }, status); }
+// a write that kept losing the race to other writes (Redis compare-and-swap): the page retries or the person tries again
+export function busy() { return fail('Too many changes at the same moment. Try again.', 503); }
 
 export async function body(req: Request): Promise<Record<string, unknown>> {
   try { const b = await req.json(); return b && typeof b === 'object' ? b as Record<string, unknown> : {}; } catch { return {}; }
