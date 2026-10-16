@@ -1,7 +1,7 @@
 // THE COTERIE CUP: the match server
 // Runs the physics of the live match 60 times a second and talks to the players and the
-// organiser's screen over one WebSocket each. Separate from the Next.js app on purpose:
-// a deploy of the app, or a slow page render, never stalls a match.
+// viewers (the organiser's big screen, the live view) over one WebSocket each. Separate from
+// the Next.js app on purpose: a deploy of the app, or a slow page render, never stalls a match.
 //
 //   node server/main.ts            (Node 22.18 or later runs the TypeScript as it is)
 //
@@ -25,7 +25,7 @@ const MAX_ROOMS = 64;
 const BACKED_UP = 256 * 1024;      // bytes waiting on a connection: skip pictures until it drains
 // Pages ping once a second. A player silent for this long is gone (a network that drops out
 // often leaves the connection looking open for minutes): close it, so the match pauses
-// until they're back. The organiser's screen only matters to itself, so it gets longer.
+// until they're back. A viewer's screen only matters to itself, so it gets longer.
 const SILENT_PLAYER_MS = 3000, SILENT_VIEWER_MS = 10000;
 
 function log(s: string) { console.log(new Date().toISOString().slice(11, 23) + ' ' + s); }
@@ -155,7 +155,7 @@ setInterval(() => {
   for (const [ws, c] of socks) {
     if (c.seat === -2) continue;                    // not in yet: the hello timer sees to it
     if (now - c.lastSeen > (c.seat >= 0 ? SILENT_PLAYER_MS : SILENT_VIEWER_MS)) {
-      log((c.room ? c.room.key + ' ' : '') + (c.seat >= 0 ? 'player ' + c.seat : 'organiser') + ' silent for ' + (now - c.lastSeen) + ' ms: closing');
+      log((c.room ? c.room.key + ' ' : '') + (c.seat >= 0 ? 'player ' + c.seat : 'viewer') + ' silent for ' + (now - c.lastSeen) + ' ms: closing');
       socks.delete(ws);
       ws.terminate();
     }

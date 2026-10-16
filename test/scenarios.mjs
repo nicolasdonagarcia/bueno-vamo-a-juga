@@ -1,11 +1,16 @@
 // The awkward moments of a live cup, in real browsers. On the match server:
 //   A  a player reloads mid-match: the match pauses, then both carry on
 //   B  the left-hand player reloads mid-match: straight back into the match, score kept
-//   C  the organiser opens a running match and sees it; nobody else can watch
+//   C  the organiser opens a running match and sees it; the match page itself is only for the two players
+//      (everyone else watches at /watch: scenario W)
 //   D  the organiser plays a match on one device ("Play it on this device")
 //   E  the left-hand player gives up waiting and plays both sides on their own device
 //   F  the organiser awards a walkover while both players wait on the match page
 //   G  the big screen: the match on now, live, who's up next, then the next match; organiser only
+//   W  the public live view (/watch): a stranger with no key watches the match on now, a waiting player gets
+//      a Watch live button and a banner when their own match is up, and the draw's controls stay organiser-only
+//   L  the organiser calls another match while the first one's players wait in its ready check (one ready,
+//      one away): their pages leave the match, the called one is played, then the first one is on again
 //   H  the right-hand player's network drops out for a few seconds: the match pauses, then both carry on
 //   I  the same for the left-hand player
 //   J  a dead ball's countdown ring and the re-drop show on a player's screen
@@ -25,7 +30,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 
 const BASE = process.env.BASE || 'http://localhost:3000';
 const OUT = process.env.OUT || 'test-results';
-const ONLY = (process.env.ONLY || 'A,B,C,D,E,F,G,H,I,J,K,P,Q,R').split(',');
+const ONLY = (process.env.ONLY || 'A,B,C,D,E,F,G,W,L,H,I,J,K,P,Q,R').split(',');
 mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -131,8 +136,8 @@ await scenario('A', 'a player reloads mid-match: the match pauses, then both car
     const t1 = await fetch(BASE + '/api/t/' + c.code + '/m/' + c.m.id + '/ticket', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'guess' }) });
     const t2 = await fetch(BASE + '/api/t/' + c.code + '/m/' + c.m.id + '/ticket', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
     if (t1.status !== 403 || t2.status !== 403) throw new Error('watching without the key: ' + [t1.status, t2.status]);
-    results.push(['C', 'pass', 'the organiser watches a running match; nobody else can', '']);
-    console.log('C  pass  organiser watches, others turned away');
+    results.push(['C', 'pass', 'the organiser watches a running match; the match page is only for the two players', '']);
+    console.log('C  pass  organiser watches, others turned away from the match page');
     await S.context().close(); await X.context().close();
   }
   const clock0 = await clock(H);
@@ -268,6 +273,108 @@ await scenario('G', 'the big screen: the match on now, live, who is up next, the
   await L.getByRole('heading', { name: '2 matches before yours' }).waitFor({ timeout: 10000 });
   await S.screenshot({ path: OUT + '/G-next.png' });
   for (const p of [S, L, L2, P1, P2, N, X]) await p.context().close();
+});
+
+// ---------------------------------------------------------------- W
+// Everybody with the cup's link can watch the match on now, at /watch: no admin key, no player
+// entry. The draw's controls stay on the organiser's screen. A player who is waiting watches
+// too, and is called to their own match by a banner when it comes up.
+await scenario('W', 'the public live view: a stranger watches the match on now; a waiting player is called to theirs', async () => {
+  // before the draw: arrivals and the join code, but none of the organiser's controls
+  const pre = await call('/api/t', { name: 'Pre-draw' });
+  for (const n of ['Ana', 'Ben']) await call('/api/t/' + pre.code + '/join', { name: n, flag: 'se', color: 'teal' });
+  const Pre = await open(pre.code, {}, '/t/' + pre.code + '/watch', { width: 1280, height: 720 });
+  await Pre.getByText('once the organiser makes the draw').waitFor({ timeout: 10000 });
+  check(await Pre.getByRole('button', { name: 'Make the draw' }).count() === 0, 'the public view has a Make the draw button');
+  check(await Pre.locator('button.rm').count() === 0, 'the public view has remove buttons');
+  const Org = await open(pre.code, { admin: pre.adminKey }, '/t/' + pre.code + '/screen', { width: 1280, height: 720 });
+  await Org.getByRole('button', { name: 'Make the draw' }).waitFor({ timeout: 10000 });
+  check(await Org.locator('button.rm').count() === 2, 'the organiser\'s screen lost its remove buttons');
+
+  // a running cup: four players, two first-round matches, one on at a time
+  const c = await cup({ goals: 1, capSec: 0, finalGoals: 1, finalCapSec: 0, modifiers: false }, ['Ana', 'Ben', 'Cy', 'Di']);
+  const [m1, m2] = c.ready;
+  check(c.m.id === m1.id, 'the first match is not the one on now');
+  const vs = m => c.who(m.a).name + ' vs ' + c.who(m.b).name;
+  const live = page => page.evaluate(() => !!(window.__cc && window.__cc.game.lastFrameAge < 1000 && window.__cc.game.phase === 'play'));
+  // a stranger: no saved player, no admin key
+  const W = await open(c.code, {}, '/t/' + c.code + '/watch', { width: 1280, height: 720 });
+  await W.locator('.live-match[aria-label$="' + vs(m1) + '"]').waitFor({ timeout: 15000 });
+  check(await W.getByRole('link', { name: /Play here|Resume here/ }).count() === 0, 'organiser controls on the public view');
+  check(await W.locator('.your-turn').count() === 0, 'a "your match" banner for a stranger');
+  // a player of the second match: their page offers the live match, and says it is next
+  const L = await open(c.code, { player: c.who(m2.a) }, '/t/' + c.code, { width: 1280, height: 720 });
+  await L.getByRole('heading', { name: 'You’re up next' }).waitFor({ timeout: 10000 });
+  await L.getByRole('link', { name: 'Watch live' }).click();
+  await L.waitForURL('**/watch');
+  await L.locator('.live-match[aria-label$="' + vs(m1) + '"]').waitFor({ timeout: 15000 });
+  check(await L.locator('.your-turn').count() === 0, 'told it is their turn while another match is on');
+  // the first match is played, CPU on both sides, and both watchers get it live
+  const path = '/t/' + c.code + '/m/' + m1.id + '?bot=0.8';
+  const P1 = await open(c.code, { player: c.who(m1.a) }, path, { width: 480, height: 330 });
+  const P2 = await open(c.code, { player: c.who(m1.b) }, path, { width: 480, height: 330 });
+  const t0 = Date.now();
+  for (const [page, who] of [[W, 'the stranger'], [L, 'the waiting player']]) await until(() => live(page), 40000, 'the match live for ' + who);
+  console.log('   live for both watchers ' + ((Date.now() - t0) / 1000).toFixed(1) + 's after the players opened it');
+  await W.locator('.live-match .pill', { hasText: 'Live' }).waitFor({ timeout: 10000 });
+  await sleep(1500);
+  await W.screenshot({ path: OUT + '/W-stranger-live.png' });
+  // full time: the waiting player is called (a banner to their own match); the stranger's view moves on
+  await until(async () => (await match(c.code, m1.id)).status === 'done', 150000, 'the first match finished');
+  await L.locator('.your-turn').waitFor({ timeout: 15000 });
+  const href = await L.locator('.your-turn a').getAttribute('href');
+  check(href === '/t/' + c.code + '/m/' + m2.id, 'the banner links to ' + href);
+  await L.screenshot({ path: OUT + '/W-your-turn.png' });
+  await W.locator('.live-match[aria-label$="' + vs(m2) + '"]').waitFor({ timeout: 20000 });
+  check(await W.locator('.your-turn').count() === 0, 'a "your match" banner for a stranger after the first match');
+  // the organiser's big screen is still the organiser's, and a stranger can't open a match page as a player
+  const N = await open(c.code, {}, '/t/' + c.code + '/screen');
+  await N.getByText('This screen is for the organiser').waitFor({ timeout: 10000 });
+  const X = await open(c.code, {}, '/t/' + c.code + '/m/' + m2.id);
+  await X.getByRole('heading', { name: 'Not your match' }).waitFor({ timeout: 10000 });
+  await X.getByRole('link', { name: 'Watch live' }).waitFor({ timeout: 3000 });
+  for (const p of [Pre, Org, W, L, P1, P2, N, X]) await p.context().close();
+});
+
+// ---------------------------------------------------------------- L
+// Ana is in the match on now and has pressed ready; Ben has its page open but is away. The
+// organiser calls the next match instead. Ana's and Ben's pages leave the match (no ready
+// button: Ben coming back can't kick it off alongside the called one), the called match is
+// played, and then theirs is on again, in a fresh room, and they play it.
+await scenario('L', 'the organiser calls another match while the first one\'s players wait: never two at once', async () => {
+  const c = await cup({ goals: 1, capSec: 0, finalGoals: 1, finalCapSec: 0, modifiers: false }, ['Ana', 'Ben', 'Cy', 'Di']);
+  const [x, y] = c.ready;
+  check(c.m.id === x.id, 'the first match is not the one on now');
+  const live = async () => (await call('/api/t/' + c.code)).matches.filter(m => m.status === 'live').map(m => m.id);
+  const xPath = '/t/' + c.code + '/m/' + x.id;
+  const H = await open(c.code, { player: c.who(x.a) }, xPath);
+  const G = await open(c.code, { player: c.who(x.b) }, xPath);
+  await H.getByRole('button', { name: 'I\'m ready' }).click();
+  await G.getByRole('button', { name: 'I\'m ready' }).waitFor({ timeout: 15000 });      // away from the keyboard
+  // the organiser calls y instead: both of x's pages leave the match
+  await call('/api/t/' + c.code + '/admin', { key: c.adminKey, action: 'next', matchId: y.id });
+  const t0 = Date.now();
+  for (const p of [H, G]) await p.getByRole('heading', { name: 'Not your turn yet' }).waitFor({ timeout: 10000 });
+  const left = ((Date.now() - t0) / 1000).toFixed(1);
+  check(await G.getByRole('button', { name: 'I\'m ready' }).count() === 0, 'a ready button while another match is called');
+  await G.getByText('The organiser put another match on first').waitFor({ timeout: 3000 });
+  await G.screenshot({ path: OUT + '/L-turn-taken.png' });
+  // y is played, CPU on both sides; x never goes live alongside it
+  const yPath = '/t/' + c.code + '/m/' + y.id + '?bot=0.8';
+  const P1 = await open(c.code, { player: c.who(y.a) }, yPath, { width: 480, height: 330 });
+  const P2 = await open(c.code, { player: c.who(y.b) }, yPath, { width: 480, height: 330 });
+  let maxLive = 0;
+  await until(async () => {
+    const l = await live();
+    maxLive = Math.max(maxLive, l.length);
+    if (l.includes(x.id)) throw new Error(x.id + ' went live while ' + y.id + ' was called');
+    return (await match(c.code, y.id)).status === 'done';
+  }, 150000, 'the called match finished');
+  // x is on again: both pages are back in its ready check, in a fresh room, and play it
+  await readyBoth(H, G);
+  await until(async () => (await match(c.code, x.id)).status === 'live', 15000, x.id + ' live');
+  check(String(await live()) === x.id, 'live: ' + await live());
+  return 'both pages left ' + left + ' s after the call; at most ' + maxLive + ' match live; then ' + x.id + ' kicked off in a new room';
 });
 
 // ---------------------------------------------------------------- H + I

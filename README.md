@@ -1,17 +1,17 @@
 # The Coterie Cup
 
-One-button ragdoll football as a 1v1 knockout cup for the office. Everyone plays on their own laptop or phone, one match at a time, and the whole meeting watches that match live on the big screen until one of you lifts the cup.
+One-button ragdoll football as a 1v1 knockout cup for the office. Everyone plays on their own laptop or phone, one match at a time, and the whole meeting watches that match live, on the big screen or on their own screen, until one of you lifts the cup.
 
 The live match runs on a small match server next to the site, so both players see the same match and the big screen draws it straight from there. It all fits on one DigitalOcean droplet, or on your own computer for a cup on the office Wi-Fi.
 
 ## Running the cup in a 30-minute meeting
 
 1. **Before the meeting**, open the site and press **Start a cup**. You land on the admin page. Keep that link to yourself, because it starts the draw and changes results.
-2. **When the meeting starts**, open the **big screen** from the admin page and share that window in your video call (in Zoom, tick *Share sound* if you want the crowd noise). It shows a QR code, the code and everyone who has joined, with a CPU match playing while people arrive. Only the organiser can open it.
+2. **When the meeting starts**, open the **big screen** from the admin page and share that window in your video call (in Zoom, tick *Share sound* if you want the crowd noise). It shows a QR code, the code and everyone who has joined, with a CPU match playing while people arrive. Only the organiser can open it. Everyone else can watch the same live match on their own screen, the **live view** (`/t/{code}/watch`): players press **Watch live** on their page, and the admin page has its link to share with anyone who isn't playing. It has none of the organiser's controls.
 3. **Everyone scans the QR code** and picks a name, a flag and a kit colour. While they wait, they can warm up against the CPU.
 4. **Press "Make the draw"** on the big screen or the admin page. **One match is played at a time**, in bracket order. The first pair sees **Your match is ready → Play**; everyone else sees how many matches come before theirs. Both players press **I'm ready** and the match starts.
 5. **The big screen shows the match on now**, live and with sound, and who's up next. When it ends, the result stays up for a few seconds and then the next match takes over. **Bracket** at the top switches to the bracket.
-6. **Results go in by themselves.** When it's their turn, the next pair's page beeps and shows **Play** (a page already open on their match starts it by itself), and winners see their next match as soon as their opponent is known. Players only open their own matches: everyone watches the rest on the shared screen.
+6. **Results go in by themselves.** When it's their turn, the next pair's page beeps and shows **Play** (a page already open on their match starts it by itself), and winners see their next match as soon as their opponent is known. Players only play their own matches; everyone watches the rest on the shared screen or in the live view, which also calls a player who is watching when their own match is ready.
 
 The default rules are:
 
@@ -29,7 +29,7 @@ With 16 players that is 15 matches, one after another. If every match ran to its
 
 | Problem | What to do |
 | --- | --- |
-| Someone isn't there when their match is called | Admin page → **Manage** on another match → **Play this one next**, and come back to theirs later. If they don't turn up at all: **Manage** → *goes through* (walkover). |
+| Someone isn't there when their match is called | Admin page → **Manage** on another match → **Play this one next**, and come back to theirs later. The pages of the match you skipped leave it until it's their turn again, so it can't kick off alongside the one you called. If they don't turn up at all: **Manage** → *goes through* (walkover). |
 | Someone is listed twice (Ana and Ana 2), say their browser froze and they joined again from another one | Before the draw: on the big screen or the admin page, press **×** next to the entry without a green dot, then **Remove**. The other entry becomes plain Ana again. After the draw nobody new can join, so ask them to reopen the cup in the browser they joined with: their place is kept there. |
 | A laptop drops out mid-match | The match pauses and carries on 3 seconds after they're back. A player who reloads goes straight back into the match where it is. |
 | The match server restarts mid-match (a deploy with `--now`, or a crash) | The pages reconnect by themselves and the match carries on from the saved score, with the clock starting again. |
@@ -96,14 +96,17 @@ The other tests need a running site. `test/api.mjs` only needs `npm run build &&
 
 ```bash
 NEXT_PUBLIC_BOTS=1 npm run build && npm start
-node test/api.mjs                           # every API route: input, permissions, tickets, simultaneous writes
+node test/api.mjs                           # every API route: input, permissions, tickets, watching, simultaneous writes,
+                                            # a 10-player cup one match at a time
 node test/features.mjs                      # every page and button: practice, create, admin, joining, the player page,
                                             # keys, touch, mute, golden goal, time limits, phones, the big-screen lobby
 RESTART_MATCH_SERVER='pkill -TERM -f "server/mai[n].ts"' node test/scenarios.mjs
                                             # reloads, dropped connections, the match server restarting (npm start
                                             # brings it back), the organiser watching, one-device matches, walkovers,
-                                            # the big screen, peer to peer
-PLAYERS=16 node test/e2e.mjs                # a whole cup, one match at a time, the big screen following along
+                                            # the big screen, the live view, calling another match while a pair waits,
+                                            # peer to peer
+PLAYERS=16 node test/e2e.mjs                # a whole cup, one match at a time, the big screen and the live view
+                                            # following along
 node test/rounds.mjs                        # every ball and crazy round, drawn and played
 NEAR=5 node test/lag.mjs 75 15              # one player 5 ms from the match server, the other 75 ms and 15 ms
                                             # of jitter: how late presses show on each screen (NET=p2p: peer to peer)
@@ -126,13 +129,13 @@ To run them against Redis instead of the memory store, start the site with `REDI
   - **Dead balls:** a ball lying still is dropped again from the sky after 7 seconds (`TUNE.deadT`). The wait runs at half speed while a man is right next to the ball (`nearRate`), so someone on his way can still save it. A ball stuck on a goal roof waits 2.5 seconds (`roofT`). In the last couple of seconds a gold ring winds down around the ball.
   - **Own goals:** the banner says *Own goal* only when the scoring side hasn't touched the ball in the last 1.5 seconds (`OWN_T`), so a shot that brushes the keeper on its way in still counts as the shooter's goal.
   - **`predict.js`** is a player's copy of the match, running a little ahead of the real one (*Lag*, below).
-  - **`game.js`** draws a match and takes the presses. Its modes: `practice` and `local2p` (simulated on this device), `demo` (CPU against CPU), `player` (a player on the match server), `spectator` (draws the server's snapshots: the organiser's big screen), and, peer to peer, `host` and `guest`.
+  - **`game.js`** draws a match and takes the presses. Its modes: `practice` and `local2p` (simulated on this device), `demo` (CPU against CPU), `player` (a player on the match server), `spectator` (draws the server's snapshots: the big screen and the live view), and, peer to peer, `host` and `guest`.
 - **`server/`** is the match server: plain Node.js with [ws](https://github.com/websockets/ws), separate from the site so a deploy of the site or a slow page never stalls a match.
-  - Each match is a room. It runs the match 60 times a second and sends the two players its full state 20 times a second, and the big screen small snapshots 30 times a second.
-  - A page gets in with a **ticket**: the site signs it (HMAC with `MATCH_SECRET`) for one player of one match, or for the organiser, and it lasts 10 minutes. The match server never reads the database.
+  - Each match is a room. It runs the match 60 times a second and sends the two players its full state 20 times a second, and its viewers (the big screen, the live view) small snapshots 30 times a second, about 8 KB/s each. A room takes up to 120 viewers (`MAX_VIEWERS`); the next one is told it's full.
+  - A page gets in with a **ticket**: the site signs it (HMAC with `MATCH_SECRET`) for one player of one match, or for a viewer: the organiser (any match, with the admin key) or anyone with the cup's link (only the match on now). It lasts 10 minutes. The match server never reads the database.
   - Kick-offs, goals and results go back to the site's report route, signed with the same secret, retried in order until they're saved. If the match server restarts, the next ticket tells it the saved score, and the match carries on from there.
   - Pages ping once a second. A player silent for 3 seconds (a network that dropped out, which often leaves the connection looking open) is taken as gone, so the match pauses; their page gives up after 3.5 seconds without an answer and comes back by itself.
-  - **One match at a time:** the bracket order decides who's on now (the organiser can call another match next), and only the match on now can be played.
+  - **One match at a time:** the bracket order decides who's on now (the organiser can call another match next), and only the match on now can be played. When calling another match takes the turn from one that hasn't kicked off, that match gets a new generation: the room its players may already be waiting in is dropped, its old tickets can't kick off or report a result, and its pages leave it until it's on again.
 - **Lag:** between New Jersey and Buenos Aires a message takes about 150 ms there and back, and no buffer can make that shorter. So each player's page predicts:
   - It runs its own **copy of the match a little ahead** of the server: far enough that a press made now reaches the server before the server gets to that tick. Its own men react at once (after the input delay, below). Each press is stamped with that tick, and the server applies it on exactly that tick, so both matches agree.
   - The server sends each player its **full state** 20 times a second: every body with its speed, each man's timers, and what the physics solver carries from one step to the next. When the copy had the same at that tick, which is most of the time, nothing happens. When the server did something the copy couldn't know (the other player's press, usually), the copy goes back to the server's state and runs the ticks since again. Anything that moved because of that slides into place over about a tenth of a second.
@@ -148,7 +151,7 @@ To run them against Redis instead of the memory store, start the site with `REDI
   - Read the state: `GET /api/t/{code}`
   - Join: `POST /api/t/{code}/join`
   - Organiser actions: `POST /api/t/{code}/admin`
-  - A ticket for the match server: `POST /api/t/{code}/m/{id}/ticket`
+  - A ticket for the match server: `POST /api/t/{code}/m/{id}/ticket` (`{ token }` a player's seat, `{ key }` the organiser watching, `{ watch: true }` anyone watching the match on now)
   - Kick-off, goal and result reports (the match server, or peer to peer the left-hand player): `POST /api/t/{code}/m/{id}/report`
   - Peer to peer only: signaling, `/api/t/{code}/m/{id}/signal`, and relay credentials, `GET /api/ice`
 

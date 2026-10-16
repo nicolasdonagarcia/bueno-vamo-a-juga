@@ -1,8 +1,10 @@
 'use client';
-// The organiser's big screen, made to be shared in the meeting's video call: the QR
-// code and arrivals, then the live match (the cup plays one match at a time), who's up
-// next, the bracket, and the champion. Watching needs the admin key, so only the
-// organiser can open it.
+// The big screen, made to be shared in the meeting's video call: the QR code and
+// arrivals, then the live match (the cup plays one match at a time), who's up next, the
+// bracket, and the champion. At /screen it is the organiser's (it needs the admin key, and
+// it has the draw and the other controls). At /watch (`watch`) it is the same view for
+// everybody who has the cup's link, players included: no controls, no admin key, and a
+// player who is watching is called to their own match when it comes up.
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bracket } from '@/components/Bracket';
@@ -10,32 +12,36 @@ import GameView from '@/components/GameView';
 import MatchStage from '@/components/MatchStage';
 import { Brand, Loading, PlayerChip, QR, RemovePlayer } from '@/components/bits';
 import { ChampionBanner } from '@/components/Champion';
-import { ApiError, api, matchOf, playerOf, rulesLine, useIdentity, useTournament, type View } from '@/lib/client';
+import { ApiError, api, matchOf, myStatus, playerOf, rulesLine, useIdentity, useTournament, type View } from '@/lib/client';
 import { roundName, type PublicMatch } from '@/lib/tournament';
 import { Snd } from '@/lib/engine/sound';
 
 const KEEP_MS = 10000;            // a match that just finished stays up this long, so its result can be seen
 
-export default function Screen({ code }: { code: string }) {
+export default function Screen({ code, watch = false }: { code: string; watch?: boolean }) {
   const idn = useIdentity(code);
   const { setAdmin } = idn;
-  const key = idn.admin;
+  const key = watch ? null : idn.admin;                              // the public view never uses the admin key
+  const token = watch ? idn.player?.token || null : null;           // a player who watches is still called to their match
   const [keyState, setKeyState] = useState<'unknown' | 'ok' | 'bad'>('unknown');
-  const { t, error, refresh } = useTournament(code, null, { enabled: idn.ready && !!key && keyState !== 'bad', every: 1500 });
+  const { t, error, refresh } = useTournament(code, token, { enabled: idn.ready && (watch || (!!key && keyState !== 'bad')), every: watch ? 2000 : 1500 });
   const [tab, setTab] = useState<'live' | 'bracket'>('live');
   const [origin, setOrigin] = useState('');
+  const [touch, setTouch] = useState(false);       // a phone or tablet: the live view's hint to turn it sideways
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
 
   // an admin link (#k=…) opened here works too
   useEffect(() => {
     setOrigin(window.location.origin);
+    setTouch(matchMedia('(hover: none) and (pointer: coarse)').matches);
+    if (watch) return;
     const mk = /[#&]k=([^&]+)/.exec(window.location.hash);
     if (mk) {
       setAdmin(decodeURIComponent(mk[1]));
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     }
-  }, [setAdmin]);
+  }, [setAdmin, watch]);
   useEffect(() => {
     if (!key) return;
     let live = true;
@@ -67,8 +73,24 @@ export default function Screen({ code }: { code: string }) {
   })();
   const showLive = tab === 'live' && !!shown;
 
+  // a player who is watching: when their own match is on, a banner (and a beep and a buzz if
+  // they were waiting) takes them to it, as on their own page
+  const mine = watch && t && token && t.forToken === token ? t.you : null;
+  const myPlay = t && mine ? myStatus(t, mine) : null;
+  const playId = myPlay && myPlay.kind === 'play' ? myPlay.m.id : '';
+  const alerted = useRef('');
+  const sawWaiting = useRef(false);
+  useEffect(() => { if (t && t.forToken === token && !playId) sawWaiting.current = true; });
+  useEffect(() => {
+    if (!playId || alerted.current === playId) return;
+    alerted.current = playId;
+    if (!sawWaiting.current) return;
+    try { Snd.beep(true); setTimeout(() => Snd.beep(true), 260); } catch { /* no sound yet */ }
+    try { navigator.vibrate?.([120, 60, 120]); } catch { /* not supported */ }
+  }, [playId]);
+
   if (!idn.ready) return <main className="screen"><div className="screen-center"><Loading /></div></main>;
-  if (!key || keyState === 'bad') {
+  if (!watch && (!key || keyState === 'bad')) {
     return (
       <main className="screen">
         <div className="screen-center">
@@ -104,7 +126,13 @@ export default function Screen({ code }: { code: string }) {
   if (t.status === 'lobby') {
     return (
       <main className="screen">
-        <header className="screen-head"><Brand name={t.name} href={'/t/' + code} /><span className="pill">Entries open</span></header>
+        <header className="screen-head">
+          <Brand name={t.name} href={'/t/' + code} />
+          <div className="row">
+            {watch ? <Link className="btn ghost small" href={'/t/' + code}>My page</Link> : null}
+            <span className="pill">Entries open</span>
+          </div>
+        </header>
         <section className="lobby-top">
           <div className="stack tight-stack">
             <h1 className="title">{t.name}</h1>
@@ -112,7 +140,9 @@ export default function Screen({ code }: { code: string }) {
           </div>
           <div className="lobby-count">
             <p className="arrivals"><b>{t.players.length}</b> {t.players.length === 1 ? 'player' : 'players'} in</p>
-            <button type="button" className="btn big" onClick={start} disabled={busy || t.players.length < 2}>{busy ? 'Drawing…' : 'Make the draw'}</button>
+            {watch ? <p className="note">The first match shows up here once the organiser makes the draw.</p> : (
+              <button type="button" className="btn big" onClick={start} disabled={busy || t.players.length < 2}>{busy ? 'Drawing…' : 'Make the draw'}</button>
+            )}
             {actionError ? <p className="error">{actionError}</p> : null}
           </div>
         </section>
@@ -137,7 +167,7 @@ export default function Screen({ code }: { code: string }) {
             <li key={p.id} className="p arrive">
               <PlayerChip p={p} />
               <span className={'online' + (t.online[p.id] ? ' on' : '')} title={t.online[p.id] ? 'Online' : 'Not seen recently'} />
-              <RemovePlayer name={p.name} onRemove={() => remove(p.id)} />
+              {watch ? null : <RemovePlayer name={p.name} onRemove={() => remove(p.id)} />}
             </li>
           ))}
         </ul>
@@ -157,6 +187,7 @@ export default function Screen({ code }: { code: string }) {
             <button type="button" role="radio" aria-checked={!showLive} onClick={() => setTab('bracket')}>Bracket</button>
           </div>
         ) : null}
+        {watch ? <Link className="btn ghost small" href={'/t/' + code}>My page</Link> : null}
         <span className="pill code-pill">Code {code}</span>
       </div>
     </header>
@@ -165,16 +196,23 @@ export default function Screen({ code }: { code: string }) {
   return (
     <main className={'screen' + (showLive ? ' live-mode' : '')}>
       {head}
+      {playId ? (
+        <div className="your-turn" role="status">
+          <span>{myPlay && myPlay.kind === 'play' && myPlay.m.status === 'live' ? 'Your match is on' : 'Your match is ready'}</span>
+          <Link className="btn small" href={'/t/' + code + '/m/' + playId}>Play</Link>
+        </div>
+      ) : null}
       {showLive && shown ? (
         <>
           <LiveMatch key={shown.id} t={t} m={shown} code={code} adminKey={key} />
-          <p className="tiny muted center up-next">{next ? <>Up next: <PlayerChip p={playerOf(t, next.a)} fallback="To be decided" /> vs <PlayerChip p={playerOf(t, next.b)} fallback="To be decided" /> · {next.label}</> : t.status === 'finished' || shown.round === t.rounds ? ' ' : 'Then the next round'}</p>
+          <p className="tiny muted center up-next">{next ? <>Up next: <PlayerChip p={playerOf(t, next.a)} fallback="To be decided" /> vs <PlayerChip p={playerOf(t, next.b)} fallback="To be decided" /> · {next.label}</> : t.status === 'finished' || shown.round === t.rounds ? ' ' : 'Then the next round'}
+            {watch && touch ? <span className="portrait-only"> · Turn your phone sideways for a bigger pitch</span> : null}</p>
         </>
       ) : (
         <>
-          {t.status === 'finished' ? <ChampionBanner t={t} /> : null}
-          <Bracket t={t} big fill={t.status === 'running'} onWatch={() => { setTab('live'); Snd.unlock(); }} showOnline
-            localHref={m => m.id === t.current && (m.status === 'ready' || (m.status === 'live' && m.local === 'admin')) ? '/t/' + code + '/m/' + m.id + '?local=1&from=screen' : null} />
+          {t.status === 'finished' ? <ChampionBanner t={t} me={mine} /> : null}
+          <Bracket t={t} me={mine} big fill={t.status === 'running'} onWatch={() => { setTab('live'); Snd.unlock(); }} showOnline={!watch}
+            localHref={watch ? undefined : m => m.id === t.current && (m.status === 'ready' || (m.status === 'live' && m.local === 'admin')) ? '/t/' + code + '/m/' + m.id + '?local=1&from=screen' : null} />
           {t.status === 'running' ? <p className="tiny muted center">{shown ? 'Live match shows the match on now.' : 'The live match shows up here when it starts.'}</p> : null}
         </>
       )}
@@ -183,7 +221,8 @@ export default function Screen({ code }: { code: string }) {
 }
 
 // the match on now (or just finished), filling the screen, with sound
-function LiveMatch({ t, m, code, adminKey }: { t: View; m: PublicMatch; code: string; adminKey: string }) {
+// (adminKey: the organiser's; without it the match comes from the public watch ticket)
+function LiveMatch({ t, m, code, adminKey }: { t: View; m: PublicMatch; code: string; adminKey: string | null }) {
   const pa = playerOf(t, m.a), pb = playerOf(t, m.b);
   if (!pa || !pb) return null;
   return (
@@ -198,6 +237,11 @@ function LiveMatch({ t, m, code, adminKey }: { t: View; m: PublicMatch; code: st
           <div className="tile-static">
             <p className="final-score"><b>{m.score[0]} – {m.score[1]}</b></p>
             <p className="note">{m.local === 'admin' ? 'Being played on the organiser’s screen' : 'Being played side by side on ' + pa.name + '’s device'}, so it can’t be shown here.</p>
+          </div>
+        ) : !adminKey && m.status !== 'done' && m.rules.net !== 'server' ? (
+          <div className="tile-static">
+            <p className="final-score"><b>{m.score[0]} – {m.score[1]}</b></p>
+            <p className="note">This match is played peer to peer, so it can only be shown on the organiser’s screen.</p>
           </div>
         ) : m.status === 'done' && m.via !== 'played' ? (
           <div className="tile-static">

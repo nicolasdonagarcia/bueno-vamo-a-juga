@@ -9,7 +9,7 @@ import JoinForm from '@/components/JoinForm';
 import PracticeArena from '@/components/PracticeArena';
 import { Brand, Loading, PlayerChip } from '@/components/bits';
 import { ChampionBanner } from '@/components/Champion';
-import { BOTS_ALLOWED, api, myStatus, playerOf, rulesLine, useIdentity, useTournament, type MyStatus, type View } from '@/lib/client';
+import { BOTS_ALLOWED, api, matchOf, myStatus, playerOf, rulesLine, useIdentity, useTournament, type MyStatus, type View } from '@/lib/client';
 import { COLORS } from '@/lib/engine/shared';
 import { Snd } from '@/lib/engine/sound';
 import { FLAG_LIST } from '@/lib/flags';
@@ -140,8 +140,12 @@ export default function Hub({ code, bot, botName }: { code: string; bot: string;
         <div className="stack">
           {t.status === 'finished' ? <ChampionBanner t={t} me={me} />
             : mine ? <StatusCard t={t} code={code} status={status} botQ={botQ} /> : (
-              <div className="card"><p className="note">The draw has been made, so entries are closed. You can follow the bracket here; the organiser shows the matches on the big screen.</p></div>
+              <div className="card"><p className="note">{t.matchServer && t.rules.net !== 'p2p'
+                ? 'The draw has been made, so entries are closed. You can follow the bracket here and watch the matches live.'
+                : 'The draw has been made, so entries are closed. You can follow the bracket here; the organiser shows the matches on the big screen.'}</p></div>
             )}
+          {/* everybody can watch the match on now (your own match opens above; waiting in the queue, the button is in your card) */}
+          {t.status === 'running' && status.kind !== 'play' && status.kind !== 'queued' ? <WatchLive t={t} code={code} /> : null}
           <section className="stack" aria-label="Bracket">
             <div className="spread"><h2 className="h3">The bracket</h2><span className="tiny muted">{rulesLine(t.rules)} · final: first to {t.rules.finalGoals}</span></div>
             <Bracket t={t} me={me} hrefFor={hrefFor} />
@@ -179,6 +183,22 @@ function LobbyList({ t, me }: { t: View; me: string | null }) {
   );
 }
 
+// the match on now, for anyone to watch from the live view (/watch)
+function WatchLive({ t, code }: { t: View; code: string }) {
+  const now = t.current ? matchOf(t, t.current) : null;
+  if (!now || now.rules.net !== 'server' || now.local) return null;
+  return (
+    <div className="card status-card" aria-label="Watch live">
+      <p className="kicker">On now · {now.label}</p>
+      <p className="lead vs-line">
+        <PlayerChip p={playerOf(t, now.a)} /> <span className="vs-x">vs</span> <PlayerChip p={playerOf(t, now.b)} />
+        {now.status === 'live' ? <> · <span className="pill live">{now.score[0]}–{now.score[1]}</span></> : ' · about to start'}
+      </p>
+      <div className="row"><Link className="btn" href={'/t/' + code + '/watch'}>Watch live</Link></div>
+    </div>
+  );
+}
+
 function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: MyStatus; botQ: string }) {
   const me = t.you;
   if (status.kind === 'play') {
@@ -208,6 +228,7 @@ function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: 
             {now.status === 'live' ? <> · <span className="pill live">{now.score[0]}–{now.score[1]}</span></> : ' · about to start'}</p>
         ) : null}
         <p className="note small">One match at a time. Keep this page open: it tells you when it’s your turn.</p>
+        {now && now.rules.net === 'server' && !now.local ? <div className="row"><Link className="btn" href={'/t/' + code + '/watch'}>Watch live</Link></div> : null}
       </div>
     );
   }
@@ -235,7 +256,7 @@ function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: 
       <div className="card status-card">
         <p className="kicker">{m.label}</p>
         <h1 className="h2">Knocked out</h1>
-        <p className="lead">{m.via === 'walkover' ? <>The match went to <PlayerChip p={by} /></> : <>Beaten by <PlayerChip p={by} /> {sc[0]}–{sc[1]}</>}. Stick around and watch who lifts the cup on the big screen.</p>
+        <p className="lead">{m.via === 'walkover' ? <>The match went to <PlayerChip p={by} /></> : <>Beaten by <PlayerChip p={by} /> {sc[0]}–{sc[1]}</>}. Stick around and watch who lifts the cup.</p>
       </div>
     );
   }

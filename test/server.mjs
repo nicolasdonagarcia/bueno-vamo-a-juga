@@ -270,6 +270,90 @@ if (want('restart')) {
   console.log(results[results.length - 1].join('  '));
 }
 
+// viewers: anyone with the cup's link watches the match on now. A viewer is a seat of -1 on
+// the ticket: they get the lobby messages and the 30-a-second frames, they are never a player,
+// and a room takes only so many of them (MAX_VIEWERS, here 2)
+function viewer(match, url = URL_WS) {
+  const st = { open: false, welcome: null, lobby: null, denied: null, frames: 0, bytes: 0 };
+  const link = createServerLink({
+    getTicket: async () => ({ ticket: ticket(match, -1), url }),
+    handlers: {
+      onOpen: w => { st.open = true; st.welcome = w; },
+      onClose: () => { st.open = false; },
+      onDenied: why => { st.denied = why; },
+      onState: buf => { st.frames++; st.bytes += buf.byteLength || 0; },
+      onCtl: msg => { if (msg.k === 'lobby') st.lobby = msg; }
+    }
+  });
+  return { st, link, stop() { link.close(); } };
+}
+if (want('viewers')) {
+  const match = 'viewers';
+  const o = { lag: LAG, jitter: JITTER, near: NEAR };
+  const A = pretend(match, 0, o), B = pretend(match, 1, o);
+  const views = [];
+  const problems = [];
+  let fps = [], kb = 0, cap = '';
+  try {
+    await until(() => A.st.events.some(e => e.k === 'kickoff'), 15000, 'kick-off');
+    for (let i = 0; i < 3; i++) views.push(viewer(match));
+    await until(() => views.every(v => v.st.open), 5000, 'the viewers in');
+    const f0 = views.map(v => v.st.frames), b0 = views.map(v => v.st.bytes);
+    await sleep(3000);
+    fps = views.map((v, i) => (v.st.frames - f0[i]) / 3);
+    kb = Math.round(views.map((v, i) => v.st.bytes - b0[i]).reduce((a, b) => a + b, 0) / views.length / 3 / 100) / 10;
+    const r = await room(match);
+    if (!views.every(v => v.st.welcome && v.st.welcome.seat === -1)) problems.push('a viewer was not welcomed as a viewer');
+    if (fps.some(x => x < 20)) problems.push('a viewer got only ' + Math.min(...fps).toFixed(0) + ' frames a second');
+    if (!r || r.viewers !== 3) problems.push('the room counts ' + (r && r.viewers) + ' viewers, not 3');
+    if (!r || !r.seats[0] || !r.seats[1]) problems.push('the players lost their seats');
+    if (!views.every(v => v.st.lobby && v.st.lobby.viewers >= 1)) problems.push('a viewer was not told about the viewers');
+    // a viewer pressing or "readying" does nothing
+    const ticks0 = r.ticks;
+    views[0].link.send({ k: 'press', s: [0, 1, 2, 3], n: 1, q: 1, l: [0, 0, 0, 0] });
+    views[0].link.send({ k: 'ready' });
+    await sleep(500);
+    if ((await room(match)).ticks <= ticks0) problems.push('the match stopped');
+    // one leaves: the count follows
+    views[2].stop();
+    await until(async () => (await room(match)).viewers === 2, 5000, 'the count to drop to 2');
+    if (A.errors.length || B.errors.length) problems.push('errors: ' + A.errors.concat(B.errors)[0].split('\n')[0]);
+  } catch (e) {
+    problems.push(e.message);
+  }
+  results.push([problems.length ? 'FAIL' : 'pass', 'viewers', '3 viewers each got ' + fps.map(x => x.toFixed(0)).join('/') + ' frames a second (' + kb + ' KB/s each), counted in the room, never players' + (problems.length ? ' · ' + problems.join('; ') : '')]);
+  console.log(results[results.length - 1].join('  '));
+  A.stop(); B.stop(); for (const v of views) v.stop();
+
+  // a room that takes two viewers: the third is turned away, not left hanging
+  const port2 = port + 41;
+  const small = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], {
+    cwd: ROOT, env: { ...process.env, MATCH_SECRET: SECRET, MATCH_PORT: String(port2), MATCH_HOST: '127.0.0.1', APP_URL: 'http://127.0.0.1:' + appPort, MATCH_TEST: '1', MAX_VIEWERS: '2' },
+    stdio: ['ignore', 'ignore', 'ignore']
+  });
+  const vs = [];
+  const problems2 = [];
+  try {
+    for (let i = 0; i < 50; i++) { try { const r = await fetch('http://127.0.0.1:' + port2 + '/health'); if (r.ok) break; } catch { } await sleep(100); }
+    const url2 = 'ws://127.0.0.1:' + port2 + '/ws';
+    vs.push(viewer('capped', url2), viewer('capped', url2));
+    await until(() => vs.every(v => v.st.open), 5000, 'two viewers in');
+    vs.push(viewer('capped', url2));
+    await until(() => vs[2].st.denied, 5000, 'the third viewer to be turned away');
+    if (vs[2].st.denied !== 'full') problems2.push('the third was told "' + vs[2].st.denied + '"');
+    const h = await (await fetch('http://127.0.0.1:' + port2 + '/health')).json();
+    const rr = (h.matches || []).find(x => x.key === 'TEST:capped');
+    if (!rr || rr.viewers !== 2) problems2.push('the room counts ' + (rr && rr.viewers) + ' viewers, not 2');
+    if (!vs[0].st.open || !vs[1].st.open) problems2.push('the first two were dropped');
+  } catch (e) {
+    problems2.push(e.message);
+  }
+  results.push([problems2.length ? 'FAIL' : 'pass', 'the viewer limit', 'with room for 2, the third was turned away as "full"' + (problems2.length ? ' · ' + problems2.join('; ') : '')]);
+  console.log(results[results.length - 1].join('  '));
+  for (const v of vs) v.stop();
+  small.kill('SIGTERM');
+}
+
 srv.kill('SIGTERM');
 app.close();
 const failed = results.filter(r => r[0] !== 'pass').length;

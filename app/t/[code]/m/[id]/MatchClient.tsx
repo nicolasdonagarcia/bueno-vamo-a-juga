@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import LocalStage, { type Reporter } from '@/components/LocalStage';
 import MatchStage from '@/components/MatchStage';
 import { Brand, Loading, PlayerChip } from '@/components/bits';
-import { ApiError, BOTS_ALLOWED, api, isCurrent, matchOf, playerOf, rulesLine, sleep, useIdentity, useTournament } from '@/lib/client';
-import { roundName } from '@/lib/tournament';
+import { ApiError, BOTS_ALLOWED, api, isCurrent, matchOf, playerOf, rulesLine, sleep, useIdentity, useTournament, type View } from '@/lib/client';
+import { roundName, type PublicMatch } from '@/lib/tournament';
 
 type Role = 'host' | 'guest' | 'spectator' | 'host-local' | 'admin-local';
 
@@ -74,6 +74,9 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
   const back = () => router.push(hubHref);
   const nextLabel = t && m ? (m.round < t.rounds ? roundName(m.round + 1, t.rounds) : null) : null;
   const serverResult = m && m.status === 'done' ? { winner: m.winner, score: m.score, via: m.via } : null;
+  // one match at a time: the organiser called another match first while this one was still
+  // waiting for its kick-off, so this page leaves the match (it opens again when it's on)
+  const turnTaken = (role === 'host' || role === 'guest') && !!m && m.status === 'ready' && !turn;
 
   let body: React.ReactNode;
   if (!idn.ready || (!t && !error)) body = <Loading text="Loading the match…" />;
@@ -82,14 +85,17 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
   } else if (!role) {
     if (local && !idn.admin) body = <Notice title="Organisers only" text="Running a match on this device needs the admin link of this cup." href={'/t/' + code} />;
     else if (notMine && m.status !== 'done') {
-      body = <Notice title="Not your match" text="Only the two players can open a match. Every match is on the organiser’s screen in the meeting." href={hubHref}>
+      const watchable = m.rules.net === 'server' && !m.local;
+      body = <Notice title="Not your match" text={watchable ? 'Only the two players can play a match, but anyone can watch the one that is on.' : 'Only the two players can open a match. Every match is on the organiser’s screen in the meeting.'}
+        href={hubHref} watchHref={watchable ? '/t/' + code + '/watch' : undefined}>
         <p className="vs-line"><PlayerChip p={pa} /> <span className="vs-x">vs</span> <PlayerChip p={pb} /></p>
       </Notice>;
     } else if ((m.status === 'ready' || m.status === 'live') && !turn && (t.you === m.a || t.you === m.b)) {
       const now = matchOf(t, t.current || '');
       const before = t.queue.indexOf(m.id);
-      body = <Notice title={before === 1 ? 'You’re up next' : 'Not your turn yet'} text={'One match at a time. ' + (before > 1 ? before + ' matches before yours. ' : '') + 'Keep this page open: your match starts here when it’s your turn.'} href={hubHref}>
-        {now ? <p className="vs-line">Now playing: <PlayerChip p={playerOf(t, now.a)} /> <span className="vs-x">vs</span> <PlayerChip p={playerOf(t, now.b)} />{now.status === 'live' ? <span className="pill live">{now.score[0]}–{now.score[1]}</span> : null}</p> : null}
+      body = <Notice title={before === 1 ? 'You’re up next' : 'Not your turn yet'} text={'One match at a time. ' + (before > 1 ? before + ' matches before yours. ' : '') + 'Keep this page open: your match starts here when it’s your turn.'}
+        href={hubHref} watchHref={watchHrefFor(code, now)}>
+        <NowPlaying t={t} now={now} />
       </Notice>;
     } else if (m.status === 'waiting') {
       body = <Notice title="Not ready yet" text="This match starts once both matches before it are finished." href={hubHref}>
@@ -113,6 +119,12 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
       href={hubHref} />;
   } else if (role === 'host-local' || role === 'admin-local') {
     body = reporter ? <LocalStage key={role + ':' + (m.gen || 0)} m={m} pa={pa} pb={pb} reporter={reporter} resumeScore={resume} nextLabel={nextLabel} onExit={back} full /> : <Loading />;
+  } else if (turnTaken) {
+    const now = matchOf(t, t.current || '');
+    body = <Notice title="Not your turn yet" text="The organiser put another match on first. Keep this page open: your match starts here when it’s your turn."
+      href={hubHref} watchHref={watchHrefFor(code, now)}>
+      <NowPlaying t={t} now={now} />
+    </Notice>;
   } else {
     body = (
       <MatchStage key={role + ':' + (m.gen || 0)} role={role} transport={m.rules.net === 'server' ? 'server' : 'p2p'} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
@@ -124,7 +136,7 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
 
   const hint = role === 'spectator' ? 'You’re watching as the organiser · M toggles sound'
     : role === 'host-local' || role === 'admin-local' ? (touch ? 'Each player taps their half of the pitch' : 'Esc pauses · M toggles sound')
-      : role ? (touch ? 'Tap anywhere to jump and kick' : 'Space, W or ↑ jumps and kicks · A or D moves one player · M toggles sound') : '';
+      : role && !turnTaken ? (touch ? 'Tap anywhere to jump and kick' : 'Space, W or ↑ jumps and kicks · A or D moves one player · M toggles sound') : '';
 
   return (
     <main className="page wide play-page">
@@ -141,13 +153,28 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
   );
 }
 
-function Notice({ title, text, href, children }: { title: string; text?: string; href: string; children?: React.ReactNode }) {
+// the live view (/watch) shows the match on now, when it is on the match server and online
+function watchHrefFor(code: string, now: PublicMatch | null) {
+  return now && now.rules.net === 'server' && !now.local ? '/t/' + code + '/watch' : undefined;
+}
+function NowPlaying({ t, now }: { t: View; now: PublicMatch | null }) {
+  if (!now) return null;
+  return (
+    <p className="vs-line">Now playing: <PlayerChip p={playerOf(t, now.a)} /> <span className="vs-x">vs</span> <PlayerChip p={playerOf(t, now.b)} />
+      {now.status === 'live' ? <span className="pill live">{now.score[0]}–{now.score[1]}</span> : null}</p>
+  );
+}
+
+function Notice({ title, text, href, watchHref, children }: { title: string; text?: string; href: string; watchHref?: string; children?: React.ReactNode }) {
   return (
     <div className="card stack notice">
       <h1 className="h2">{title}</h1>
       {children}
       {text ? <p className="note">{text}</p> : null}
-      <div className="row"><a className="btn" href={href}>Back to the bracket</a></div>
+      <div className="row">
+        {watchHref ? <a className="btn" href={watchHref}>Watch live</a> : null}
+        <a className={watchHref ? 'btn ghost' : 'btn'} href={href}>Back to the bracket</a>
+      </div>
     </div>
   );
 }

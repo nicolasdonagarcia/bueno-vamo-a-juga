@@ -519,6 +519,212 @@ await group('tickets for the match server: your match when it\'s on, the organis
   if (SECRET) assert.match(await err(409, '/api/t/' + c.code + '/m/' + n1.id + '/report', { kind: 'score', score: [1, 0], gen: g0 }, { 'x-cc-server': SECRET }), /reset/);
 });
 
+await group('anyone with the cup\'s link can watch the match on now, and nothing else', async () => {
+  const c = await cup(4);
+  const v0 = await view(c.code);
+  const tkUrl = id => '/api/t/' + c.code + '/m/' + id + '/ticket';
+  const tk = (id, body) => req(tkUrl(id), body);
+  const watch = id => tk(id, { watch: true });
+  const decode = s => JSON.parse(Buffer.from(s.split('.')[0], 'base64url').toString('utf8'));
+  if (!v0.matchServer) {
+    await c.admin('start');
+    assert.equal((await watch('r1m1')).status, 503);
+    return;
+  }
+  await err(404, tkUrl('r1m1'), { watch: true });                      // no draw yet, so no matches
+  await c.admin('start');
+  const v = await view(c.code);
+  const [m1, m2] = v.matches.filter(m => m.round === 1);
+  // no token, no key: a ticket for the match on now, to watch from (seat -1)
+  const a = await watch(m1.id);
+  assert.equal(a.status, 200, a.text);
+  assert.equal(typeof a.j.url, 'string');
+  const ta = decode(a.j.ticket);
+  assert.deepEqual([ta.s, ta.c, ta.m, ta.st, ta.g, ta.a.id, ta.b.id, ta.lb], [-1, c.code, m1.id, 'ready', 0, m1.a, m1.b, 'Semi-finals']);
+  assert.ok(ta.x > Date.now() + 9 * 60000 && ta.x < Date.now() + 11 * 60000, 'lasts about 10 minutes');
+  assert.ok(!JSON.stringify(ta).includes(tokenOf(c, m1.a)), 'a token in the ticket');
+  if (SECRET) {
+    const [body, sig] = a.j.ticket.split('.');
+    assert.equal(sig, createHmac('sha256', SECRET).update(body).digest('base64url'), 'signed with MATCH_SECRET');
+  }
+  // a player's token in the body doesn't turn a watch ticket into a seat in that match
+  assert.equal(decode((await tk(m1.id, { watch: true, token: tokenOf(c, m1.a) })).j.ticket).s, -1);
+  // only the match on now, and only one that can be shown
+  assert.match(await err(409, tkUrl(m2.id), { watch: true }), /not on yet/);
+  await err(409, tkUrl('r2m1'), { watch: true });                      // no players yet
+  await err(404, tkUrl('r7m7'), { watch: true });
+  await err(404, '/api/t/QQQQQ/m/r1m1/ticket', { watch: true });
+  // `watch` is not a way in for anything else
+  await err(403, tkUrl(m1.id), {});
+  await err(403, tkUrl(m1.id), { watch: 'yes' });
+  await err(403, tkUrl(m1.id), { watch: false });
+  await err(403, tkUrl(m1.id), { key: 'wrong', watch: true });
+  // the organiser calls the other match: the tickets follow the match on now
+  assert.equal((await c.admin('next', { matchId: m2.id })).status, 200);
+  assert.equal((await watch(m2.id)).status, 200);
+  assert.match(await err(409, tkUrl(m1.id), { watch: true }), /not on yet/);
+  assert.equal((await tk(m1.id, { token: tokenOf(c, m1.a) })).status, 409);
+  assert.equal((await tk(m2.id, { token: tokenOf(c, m2.a) })).status, 200);
+  await c.admin('next', { matchId: null });
+  assert.equal((await watch(m1.id)).status, 200);
+  // (calling m2 took m1's turn, so m1 is on a newer generation now: see the next group)
+  const g1 = (await view(c.code)).matches.find(m => m.id === m1.id).gen || 0;
+  assert.ok(g1 > 0, 'm1 kept its generation after losing its turn');
+  assert.equal(decode((await watch(m1.id)).j.ticket).g, g1);
+  // live: still watchable, and the ticket carries the score
+  if (SECRET) {
+    const rep = '/api/t/' + c.code + '/m/' + m1.id + '/report';
+    await ok(rep, { kind: 'start', gen: g1 }, { 'x-cc-server': SECRET });
+    await ok(rep, { kind: 'score', score: [1, 2], gen: g1 }, { 'x-cc-server': SECRET });
+    const t1 = decode((await watch(m1.id)).j.ticket);
+    assert.deepEqual([t1.s, t1.st, t1.sc], [-1, 'live', [1, 2]]);
+    assert.match(await err(409, tkUrl(m2.id), { watch: true }), /not on yet/);      // one match at a time: the live one stays the one on
+  }
+  // a match on one device can't be shown, nor can a finished one
+  await c.admin('live', { matchId: m1.id });
+  assert.match(await err(409, tkUrl(m1.id), { watch: true }), /one device/);
+  await c.admin('result', { matchId: m1.id, winner: 'a', score: [3, 1], via: 'local' });
+  assert.match(await err(410, tkUrl(m1.id), { watch: true }), /over/);
+  // the next match is on now; peer to peer matches can't be watched from here
+  assert.equal((await watch(m2.id)).status, 200);
+  await c.admin('rules', { rules: { net: 'p2p' } });
+  assert.match(await err(409, tkUrl(m2.id), { watch: true }), /peer to peer/);
+});
+
+await group('one match at a time, airtight: the organiser calls another match while the first one\'s players wait', async () => {
+  // Ana is in the match on now and ready; Ben has its page open too, but went for a coffee.
+  // The organiser calls the next match instead, and it kicks off. Ben comes back and presses
+  // ready: the first match's room (on its old tickets) must not kick off alongside.
+  const c = await cup(4);
+  const v0 = await view(c.code);
+  if (!v0.matchServer || !SECRET) return;
+  const srv = { 'x-cc-server': SECRET };
+  const tk = (id, body) => req('/api/t/' + c.code + '/m/' + id + '/ticket', body);
+  const rep = id => '/api/t/' + c.code + '/m/' + id + '/report';
+  const decode = s => JSON.parse(Buffer.from(s.split('.')[0], 'base64url').toString('utf8'));
+  const live = x => x.matches.filter(m => m.status === 'live').map(m => m.id);
+  await c.admin('start');
+  let v = await view(c.code);
+  const [x, y] = v.matches.filter(m => m.round === 1);
+  assert.equal(v.current, x.id);
+  const old = decode((await tk(x.id, { token: tokenOf(c, x.a) })).j.ticket);    // x's players are in its room
+  decode((await tk(x.id, { token: tokenOf(c, x.b) })).j.ticket);
+  assert.equal((await c.admin('next', { matchId: y.id })).status, 200);
+  v = await view(c.code);
+  assert.equal(v.current, y.id);
+  const gy = v.matches.find(m => m.id === y.id).gen || 0;
+  assert.equal(decode((await tk(y.id, { token: tokenOf(c, y.a) })).j.ticket).g, gy);
+  await ok(rep(y.id), { kind: 'start', gen: gy }, srv);
+  // x's room kicks off on its old tickets: refused, so only y is live
+  assert.match(await err(409, rep(x.id), { kind: 'start', gen: old.g }, srv), /reset/);
+  v = await view(c.code);
+  assert.deepEqual(live(v), [y.id], 'two matches live: ' + live(v).join(', '));
+  assert.ok((v.matches.find(m => m.id === x.id).gen || 0) > old.g, 'x keeps its old generation');
+  // nor do its goals or result count
+  await err(409, rep(x.id), { kind: 'final', score: [3, 0], winner: 'a', gen: old.g }, srv);
+  // y is played; then x is on again, with new tickets of the new generation
+  await ok(rep(y.id), { kind: 'final', score: [3, 1], winner: 'a', gen: gy }, srv);
+  v = await view(c.code);
+  assert.equal(v.current, x.id);
+  const fresh = decode((await tk(x.id, { token: tokenOf(c, x.a) })).j.ticket);
+  assert.ok(fresh.g > old.g, 'new tickets of a newer generation');
+  await ok(rep(x.id), { kind: 'start', gen: fresh.g }, srv);
+  assert.deepEqual(live(await view(c.code)), [x.id]);
+  // calling the match that is already on changes nothing; taking a call back drops the called one's room
+  const c2 = await cup(4);
+  await c2.admin('start');
+  const v2 = await view(c2.code);
+  const [p, q] = v2.matches.filter(m => m.round === 1);
+  await c2.admin('next', { matchId: p.id });
+  assert.equal((await view(c2.code)).matches.find(m => m.id === p.id).gen || 0, p.gen || 0, 'calling the match on now gave it a new generation');
+  await c2.admin('next', { matchId: q.id });
+  await c2.admin('next', { matchId: null });
+  const v3 = await view(c2.code);
+  assert.equal(v3.current, p.id);
+  assert.ok((v3.matches.find(m => m.id === q.id).gen || 0) > (q.gen || 0), 'the call taken back kept its room');
+  // the organiser plays another match on their own device ("Play here") while the first one's pair waits: the same
+  const c3 = await cup(4);
+  await c3.admin('start');
+  const v4 = await view(c3.code);
+  const [r, s] = v4.matches.filter(m => m.round === 1);
+  const tk3 = (id, body) => req('/api/t/' + c3.code + '/m/' + id + '/ticket', body);
+  const oldR = decode((await tk3(r.id, { token: tokenOf(c3, r.a) })).j.ticket);
+  assert.equal((await c3.admin('live', { matchId: s.id })).status, 200);
+  assert.match(await err(409, '/api/t/' + c3.code + '/m/' + r.id + '/report', { kind: 'start', gen: oldR.g }, srv), /reset/);
+  assert.deepEqual(live(await view(c3.code)), [s.id]);
+});
+
+await group('a ten-player cup plays one match at a time, and everyone else can watch it', async () => {
+  const c = await cup(10);
+  const v0 = await view(c.code);
+  const viaServer = !!(v0.matchServer && SECRET);
+  const srv = { 'x-cc-server': SECRET };
+  const tk = (id, body) => req('/api/t/' + c.code + '/m/' + id + '/ticket', body);
+  const decode = s => JSON.parse(Buffer.from(s.split('.')[0], 'base64url').toString('utf8'));
+  const live = x => x.matches.filter(m => m.status === 'live').map(m => m.id);
+  await c.admin('start');
+  let v = await view(c.code);
+  // 10 players in a 16-slot bracket: 6 byes, so 2 first-round matches, 4 quarter-finals, 2 semi-finals, the final
+  assert.equal(v.matches.filter(m => m.via === 'bye').length, 6);
+  assert.equal(v.matches.filter(m => m.via !== 'bye').length, 9);
+  const order = v.matches.slice().sort((a, b) => a.round - b.round || a.index - b.index).map(m => m.id);
+  const played = [];
+  let watchTickets = 0;
+  for (let step = 0; step < 20 && v.status === 'running'; step++) {
+    const cur = v.matches.find(m => m.id === v.current);
+    const firstOpen = order.map(id => v.matches.find(m => m.id === id)).find(m => m.status === 'ready' || m.status === 'live');
+    assert.equal(cur.id, firstOpen.id, 'the match on now is the first open one in the playing order');
+    assert.deepEqual(live(v), [], 'nothing is live before the kick-off');
+    const others = v.matches.filter(m => m.status === 'ready' && m.id !== cur.id);
+    const rep = '/api/t/' + c.code + '/m/' + cur.id + '/report';
+    if (viaServer) {
+      // its two players get their seats; nobody else gets into a match that isn't on
+      assert.equal(decode((await tk(cur.id, { token: tokenOf(c, cur.a) })).j.ticket).s, 0);
+      assert.equal(decode((await tk(cur.id, { token: tokenOf(c, cur.b) })).j.ticket).s, 1);
+      for (const o of others) {
+        assert.equal((await tk(o.id, { token: tokenOf(c, o.a) })).status, 409, o.id + ': not their turn');
+        assert.equal((await tk(o.id, { watch: true })).status, 409, o.id + ': not on yet');
+      }
+      // everybody else watches it: a seat to watch from, never one to play from
+      const watchers = c.players.filter(p => p.playerId !== cur.a && p.playerId !== cur.b);
+      assert.equal(watchers.length, 8);
+      for (const w of watchers) {
+        const r = await tk(cur.id, { watch: true, token: w.token });
+        assert.equal(r.status, 200, r.text);
+        assert.equal(decode(r.j.ticket).s, -1);
+        watchTickets++;
+      }
+      await ok(rep, { kind: 'start', gen: cur.gen || 0 }, srv);
+    } else {
+      await c.admin('live', { matchId: cur.id });
+    }
+    v = await view(c.code);
+    assert.deepEqual(live(v), [cur.id], 'exactly one match is live');
+    assert.equal(v.current, cur.id);
+    // with one live, the organiser can't kick off another, and the others stay shut
+    if (others[0]) assert.match(await err(409, '/api/t/' + c.code + '/admin', { key: c.adminKey, action: 'live', matchId: others[0].id }), /One match at a time/);
+    if (viaServer) {
+      assert.equal(decode((await tk(cur.id, { watch: true })).j.ticket).st, 'live', 'still watchable once it has kicked off');
+      for (const o of others) assert.equal((await tk(o.id, { token: tokenOf(c, o.a) })).status, 409);
+    }
+    const sc = step % 2 ? [1, 3] : [3, 1], side = sc[0] > sc[1] ? 'a' : 'b';
+    if (viaServer) {
+      await ok(rep, { kind: 'score', score: [1, 0], gen: cur.gen || 0 }, srv);
+      await ok(rep, { kind: 'final', score: sc, winner: side, gen: cur.gen || 0 }, srv);
+    } else {
+      await c.admin('result', { matchId: cur.id, winner: side, score: sc, via: 'local' });
+    }
+    played.push(cur.id);
+    v = await view(c.code);
+    assert.deepEqual(live(v), [], 'nothing is live after the final whistle');
+  }
+  assert.equal(v.status, 'finished');
+  assert.ok(v.champion, 'a champion');
+  assert.equal(played.length, 9, 'nine matches, one after another');
+  assert.deepEqual(played, order.filter(id => played.includes(id)), 'played in the bracket\'s order');
+  if (viaServer) assert.equal(watchTickets, 9 * 8, 'eight watchers for each of the nine matches');
+});
+
 await group('reports from the match server: the shared secret, start, goals, result, a reset match', async () => {
   const c = await cup(2);
   const v0 = await view(c.code);

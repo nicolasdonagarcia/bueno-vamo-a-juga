@@ -1,5 +1,8 @@
-// A ticket to the match server for one match: the player's own seat (proved with their
-// token), or the organiser watching (proved with the admin key). Only for the match on now.
+// A ticket to the match server for one match: a player's own seat (proved with their
+// token), or a seat to watch from. Anyone who has the cup's link can watch the match that is
+// on now ({ watch: true }, nothing to prove: the cup's code is the invitation); the organiser
+// (proved with the admin key) can watch any match. Players only get their own match, and only
+// once it is on: one match at a time.
 import { currentMatch, getMatch, inputDelayOf, rulesFor } from '@/lib/tournament';
 import { TICKET_MS, signTicket, type Ticket, type TicketPlayer } from '@/lib/ticket';
 import { body, fail, isAdmin, json, loadOr404, matchServer, playerByToken } from '@/lib/server';
@@ -17,9 +20,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string; 
   if (!m) return fail('That match does not exist.', 404);
   const b = await body(req);
   let seat: 0 | 1 | -1;
+  let viewer = false;                  // watching without the admin key: only the match on now
   if (b.key !== undefined) {
-    if (!isAdmin(t, b.key)) return fail('Only the organiser can watch matches.', 403);
+    if (!isAdmin(t, b.key)) return fail('That admin key is not right.', 403);
     seat = -1;
+  } else if (b.watch === true) {
+    seat = -1;
+    viewer = true;
   } else {
     const me = playerByToken(t, b.token);
     if (!me || (me.id !== m.a && me.id !== m.b)) return fail('Not your match.', 403);
@@ -32,6 +39,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string; 
   if (m.local) return fail('This match is being played on one device.', 409);
   const cur = currentMatch(t);
   if (seat >= 0 && (!cur || cur.id !== m.id)) return fail('Not your turn yet: another match is on.', 409);
+  if (viewer && (!cur || cur.id !== m.id)) return fail('That match is not on yet. Watch the one that is on now.', 409);
   const pl = (pid: string): TicketPlayer => {
     const p = t.players.find(x => x.id === pid);
     return { id: pid, name: p ? p.name : '?', color: p ? p.color : 'orange', flag: p ? p.flag : '' };

@@ -1,6 +1,6 @@
 // Admin actions, authorised by the admin key from the creation link.
 import { getStore } from '@/lib/store';
-import { applyResult, buildBracket, cleanName, getMatch, markLive, removePlayer, resetMatch, restartCup, type Tournament } from '@/lib/tournament';
+import { applyResult, buildBracket, callNext, cleanName, currentMatch, dropSkipped, getMatch, markLive, removePlayer, resetMatch, restartCup, type Tournament } from '@/lib/tournament';
 import { body, busy, fail, isAdmin, json, loadOr404 } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
@@ -79,16 +79,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         if (!m.a || !m.b) { error = MESSAGES['not-ready']; return null; }
         const other = doc.matches.find(x => x.status === 'live' && x.id !== m.id);
         if (other && m.status !== 'live') { error = 'Another match is being played. One match at a time: finish it first, or decide it.'; return null; }
+        const before = currentMatch(doc);
         if (!markLive(m, 'admin', undefined, doc)) { error = MESSAGES['already-done']; return null; }
+        dropSkipped(doc, before);          // played out of turn: the match that was on can't kick off alongside
         return doc;
       }
-      // one match at a time: play this ready match next (someone in the match on now is late, say)
+      // one match at a time: play this ready match next (someone in the match on now is late, say);
+      // the match it replaces can't kick off alongside it (see callNext)
       case 'next': {
-        if (b.matchId === null || b.matchId === '') { doc.upNext = null; return doc; }
-        const m = getMatch(doc, matchId);
-        if (!m) { error = MESSAGES['no-match']; return null; }
-        if (m.status !== 'ready') { error = 'Only a match with both players and not started yet can go next.'; return null; }
-        doc.upNext = m.id;
+        const e = callNext(doc, b.matchId === null || b.matchId === '' ? null : matchId);
+        if (e === 'no-match') { error = MESSAGES['no-match']; return null; }
+        if (e === 'not-ready') { error = 'Only a match with both players and not started yet can go next.'; return null; }
         return doc;
       }
       case 'score': {

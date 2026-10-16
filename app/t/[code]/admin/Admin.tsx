@@ -43,6 +43,7 @@ export default function Admin({ code }: { code: string }) {
   if (!key || keyState === 'bad') return <Shell code={code} name={t.name}><KeyForm bad={keyState === 'bad'} onKey={k => setAdmin(k)} /></Shell>;
 
   const playerUrl = origin + '/t/' + code;
+  const watchUrl = origin + '/t/' + code + '/watch';
   const adminUrl = origin + '/t/' + code + '/admin#k=' + encodeURIComponent(key);
 
   return (
@@ -60,6 +61,9 @@ export default function Admin({ code }: { code: string }) {
               <p className="field-label">Big screen for the meeting</p>
               <div className="row"><a className="btn small" href={'/t/' + code + '/screen'} target="_blank" rel="noreferrer">Open the big screen</a></div>
               <p className="note small">Share it in your video call: the QR code while people join, then the live match (one at a time), who&apos;s up next and the bracket. Only you can open it.</p>
+              <p className="field-label">Live view for everyone</p>
+              <div className="row"><CopyButton text={watchUrl} label="Copy live view link" /><a className="btn ghost small" href={'/t/' + code + '/watch'} target="_blank" rel="noreferrer">Open</a></div>
+              <p className="note small">Anyone with this link can watch the match on now on their own screen, without your controls. Players also get a <b>Watch live</b> button on their page. (Peer-to-peer matches only show on your big screen.)</p>
               <p className="field-label">This admin page</p>
               <div className="row"><CopyButton text={adminUrl} label="Copy admin link" /></div>
               <p className="note small">Keep the admin link to yourself: it starts the draw and changes results.</p>

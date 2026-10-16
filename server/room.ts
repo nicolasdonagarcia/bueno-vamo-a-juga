@@ -13,7 +13,7 @@ import type { Reporter } from './report.ts';
 
 export type Conn = {
   id: number;
-  seat: number;                 // 0 left, 1 right, -1 the organiser, -2 before it said hello
+  seat: number;                 // 0 left, 1 right, -1 a viewer (the organiser, or anyone with the cup's link), -2 before it said hello
   inst: string;                 // the page load it comes from
   room: Room | null;
   sendText(s: string): void;
@@ -30,6 +30,9 @@ export type RoomDeps = {
 
 const RESUME_MS = 3000;
 const MAX_PRESSES_PER_SEC = 25;
+// Anyone who has the cup's link can watch the match on now, so a room takes only so many
+// viewers (the cup holds up to 64 players); the next one is told "full" and can try again.
+const MAX_VIEWERS = Math.max(1, Number(process.env.MAX_VIEWERS) || 120);
 
 export type Room = ReturnType<typeof createRoom>;
 
@@ -146,8 +149,15 @@ export function createRoom(t: Ticket, deps: RoomDeps) {
         sim.resetSeq(seat);                 // a (re)connected page numbers its presses from its own start
         log('player ' + seat + ' in' + (old && old !== c ? ' (replacing a connection)' : ''));
       } else {
+        if (spectators.size >= MAX_VIEWERS) {
+          c.room = null;
+          send(c, { k: 'denied', why: 'full' });
+          setTimeout(() => c.close(4003, 'full'), 50);
+          log('viewer turned away: ' + MAX_VIEWERS + ' already watching');
+          return;
+        }
         spectators.add(c);
-        log('organiser watching');
+        log('viewer watching (' + spectators.size + ')');
       }
       send(c, { k: 'welcome', seat, match: { id: t.m, label: t.lb }, inputDelay: rules.inputDelay, players: players.map(p => ({ id: p.id, name: p.name })) });
       send(c, syncMsg());

@@ -170,6 +170,33 @@ export function currentMatch(t: Pick<Tournament, 'matches' | 'status' | 'upNext'
   const pick = t.upNext ? order.find(m => m.id === t.upNext && m.status === 'ready') : null;
   return pick || order.find(m => m.status === 'ready') || null;
 }
+// After the organiser moves the turn (calling another match next, or playing one on their own
+// device), `before` being the match that was on: if it lost the turn before kicking off, it gets
+// a new generation. Its players may already be waiting in its room on the match server, on
+// tickets they got while it was on, and that room must not kick off alongside the match on now.
+// With the new generation the match server drops the room, the old tickets' kick-off and results
+// are refused, and the players' pages leave it; they get new tickets when it is on again. A
+// match already live keeps the turn, so it is never moved.
+export function dropSkipped(t: Tournament, before: Match | null) {
+  if (before && before !== currentMatch(t) && before.status === 'ready') {
+    before.gen = (before.gen || 0) + 1;
+    before.updatedAt = Date.now();
+  }
+}
+// The organiser calls a ready match to be played next (someone in the match on now is late,
+// say), or takes the call back (null).
+export function callNext(t: Tournament, id: string | null): 'no-match' | 'not-ready' | null {
+  const before = currentMatch(t);
+  if (id === null) t.upNext = null;
+  else {
+    const m = getMatch(t, id);
+    if (!m) return 'no-match';
+    if (m.status !== 'ready') return 'not-ready';
+    t.upNext = m.id;
+  }
+  dropSkipped(t, before);
+  return null;
+}
 // the matches still to play, in the order they come up: the current one first
 export function matchQueue(t: Pick<Tournament, 'matches' | 'status' | 'upNext'>): Match[] {
   const cur = currentMatch(t);

@@ -6,10 +6,11 @@
 // Needs Playwright (npm i -D playwright, or NODE_PATH pointing at an install).
 // Env: BASE (http://localhost:3000), PLAYERS (4), GOALS (2), CAP (60), SKILL (0.7),
 //      CHROME (path to a Chromium binary), OUT (screenshot folder), WATCH=0 (no big screen),
-//      NET=p2p (the organiser's switch: peer to peer instead of the match server),
-//      EQUAL=1 (peer to peer: the "Equal delay" rule)
+//      PUBLIC=0 (no public live view), NET=p2p (the organiser's switch: peer to peer instead
+//      of the match server), EQUAL=1 (peer to peer: the "Equal delay" rule)
 // Checks that the matches go one after another, never two at once, that each bot's page
-// opens its match when it's on, and that the organiser's big screen follows along: every
+// opens its match when it's on, that the public live view (/watch, a stranger with no key;
+// on the match server only) shows every match too, and that the organiser's big screen follows along: every
 // match has to show up there live.
 import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
@@ -66,11 +67,20 @@ if (process.env.WATCH !== '0') {
   screen.on('pageerror', e => problems.push('screen: ' + e.message));
   await screen.goto(BASE + '/t/' + code + '/screen');
 }
+// a stranger watching from the public live view: no admin key, no player entry
+let pub = null;
+if (process.env.PUBLIC !== '0' && process.env.NET !== 'p2p') {
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 600 } });
+  pub = await ctx.newPage();
+  pub.on('pageerror', e => problems.push('public view: ' + e.message));
+  await pub.goto(BASE + '/t/' + code + '/watch');
+}
+const viewers = [screen && { name: 'big screen', page: screen, shown: new Map() }, pub && { name: 'public view', page: pub, shown: new Map() }].filter(Boolean);
 await call('/api/t/' + code + '/admin', { key: adminKey, action: 'start' });
 console.log(stamp(), 'draw made');
 
 let last = '', v = null, shots = 0, maxLive = 0;
-const liveSince = new Map(), shown = new Map();      // match id -> when it went live / how long until the big screen had it
+const liveSince = new Map();      // match id -> when it went live (each viewer's `shown`: how long until it had it)
 while (Date.now() - t0 < LIMIT_MS) {
   v = await call('/api/t/' + code);
   const line = v.matches.filter(m => m.via !== 'bye').map(m => m.id + ':' + m.status[0] + (m.status === 'live' || m.status === 'done' ? m.score.join('-') : '') + (m.id === v.current ? '*' : '')).join(' ');
@@ -80,17 +90,18 @@ while (Date.now() - t0 < LIMIT_MS) {
   maxLive = Math.max(maxLive, live.length);
   if (live.length > 1) problems.push(stamp() + ' two matches live at once: ' + live.map(m => m.id).join(', '));
   for (const m of live) if (!liveSince.has(m.id)) liveSince.set(m.id, Date.now());
-  // the big screen shows the match on now
-  if (screen) {
+  // the big screen (and the public view) show the match on now
+  for (const w of viewers) {
     try {
-      const s = await screen.evaluate(() => window.__cc ? { match: window.__cc.match, age: window.__cc.game.lastFrameAge, phase: window.__cc.game.phase } : null);
+      const s = await w.page.evaluate(() => window.__cc ? { match: window.__cc.match, age: window.__cc.game.lastFrameAge, phase: window.__cc.game.phase } : null);
       const m = live.find(x => !x.local);
-      if (m && s && s.match === m.id && s.age < 1500 && !shown.has(m.id)) {
-        shown.set(m.id, Math.round((Date.now() - liveSince.get(m.id)) / 1000));
-        console.log(stamp(), 'big screen shows', m.id, '(' + shown.get(m.id) + 's after kick-off)');
-        if (shown.size === 1) { await sleep(1000); await screen.screenshot({ path: OUT + '/screen-live.png' }); }
+      if (m && s && s.match === m.id && s.age < 1500 && !w.shown.has(m.id)) {
+        w.shown.set(m.id, Math.round((Date.now() - liveSince.get(m.id)) / 1000));
+        console.log(stamp(), w.name, 'shows', m.id, '(' + w.shown.get(m.id) + 's after kick-off)');
+        if (w.page === screen && w.shown.size === 1) { await sleep(1000); await screen.screenshot({ path: OUT + '/screen-live.png' }); }
+        if (w.page === pub && w.shown.size === 1) await pub.screenshot({ path: OUT + '/public-live.png' });
       }
-    } catch (e) { problems.push('big screen: ' + e.message.split('\n')[0]); }
+    } catch (e) { problems.push(w.name + ': ' + e.message.split('\n')[0]); }
   }
   if (shots < 1 && live.length) {
     const p = pages.find(x => x.url().includes('/m/' + live[0].id));
@@ -101,13 +112,15 @@ while (Date.now() - t0 < LIMIT_MS) {
 if (screen) {
   await sleep(2500);
   await screen.screenshot({ path: OUT + '/screen-final.png' });
+}
+for (const w of viewers) {
   // a match only counts as missed if it was live long enough for the screen to connect
   for (const m of v.matches) {
-    if (m.via !== 'played' || shown.has(m.id) || !m.startedAt || !m.endedAt) continue;
-    if (m.endedAt - m.startedAt > 20000) problems.push('big screen never showed ' + m.id);
+    if (m.via !== 'played' || w.shown.has(m.id) || !m.startedAt || !m.endedAt) continue;
+    if (m.endedAt - m.startedAt > 20000) problems.push(w.name + ' never showed ' + m.id);
   }
-  const waits = [...shown.values()];
-  if (waits.length) console.log(stamp(), 'big screen showed', waits.length, 'matches; seconds after kick-off: max', Math.max(...waits), 'median', waits.sort((a, b) => a - b)[waits.length >> 1]);
+  const waits = [...w.shown.values()];
+  if (waits.length) console.log(stamp(), w.name, 'showed', waits.length, 'matches; seconds after kick-off: max', Math.max(...waits), 'median', waits.sort((a, b) => a - b)[waits.length >> 1]);
 }
 
 // one after another: each match kicked off after the one before had ended

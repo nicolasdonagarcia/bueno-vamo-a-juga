@@ -1,7 +1,7 @@
 // Bracket logic: seeding, byes, advancing, corrections. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, restartCup, markLive, currentMatch, matchQueue, playingOrder, publicView, netRule, DEFAULT_RULES } from '../../lib/tournament.ts';
+import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, restartCup, markLive, currentMatch, matchQueue, playingOrder, publicView, netRule, callNext, dropSkipped, DEFAULT_RULES } from '../../lib/tournament.ts';
 
 function tournament(n) {
   return {
@@ -169,6 +169,61 @@ test('one match at a time: the organiser can pick the next match, and a walkover
   // a match played out of turn on one device counts as the live one
   markLive(t.matches.find(m => m.id === 'r1m4'), 'admin', undefined, t);
   assert.equal(currentMatch(t).id, 'r1m4');
+});
+
+test('one match at a time: calling another match next drops the waiting one\'s room (a new generation)', () => {
+  const t = tournament(8);
+  buildBracket(t, rng(8));
+  const g = id => t.matches.find(m => m.id === id).gen || 0;
+  const gens0 = Object.fromEntries(t.matches.map(m => [m.id, m.gen || 0]));
+  // r1m1 is on, its players may be waiting in its room: calling r1m3 instead moves its turn away
+  assert.equal(currentMatch(t).id, 'r1m1');
+  assert.equal(callNext(t, 'r1m3'), null);
+  assert.equal(currentMatch(t).id, 'r1m3');
+  assert.equal(g('r1m1'), gens0.r1m1 + 1, 'the match that lost its turn gets a new generation');
+  for (const m of t.matches) if (m.id !== 'r1m1') assert.equal(m.gen || 0, gens0[m.id], m.id + ' changed generation');
+  // calling a different one again: r1m3 loses the turn; calling the one on now changes nothing
+  assert.equal(callNext(t, 'r1m4'), null);
+  assert.equal(g('r1m3'), gens0.r1m3 + 1);
+  assert.equal(callNext(t, 'r1m4'), null);
+  assert.equal(g('r1m4'), gens0.r1m4);
+  // taking the call back: back to bracket order, the called one's room goes
+  assert.equal(callNext(t, null), null);
+  assert.equal(currentMatch(t).id, 'r1m1');
+  assert.equal(g('r1m4'), gens0.r1m4 + 1);
+  assert.equal(g('r1m1'), gens0.r1m1 + 1, 'the match back on keeps its newer generation');
+  // a live match keeps its turn and its room, whatever is called
+  markLive(t.matches.find(m => m.id === 'r1m1'), undefined, 'server', t);
+  const live1 = g('r1m1');
+  assert.equal(callNext(t, 'r1m2'), null);
+  assert.equal(currentMatch(t).id, 'r1m1');
+  assert.equal(g('r1m1'), live1);
+  assert.equal(g('r1m2'), gens0.r1m2, 'the called match, not yet on, is untouched');
+  // what can't be called
+  assert.equal(callNext(t, 'r2m1'), 'not-ready');          // no players yet
+  assert.equal(callNext(t, 'r1m1'), 'not-ready');          // already live
+  assert.equal(callNext(t, 'r9m9'), 'no-match');
+});
+
+test('one match at a time: a match played out of turn on one device drops the waiting one\'s room too', () => {
+  const t = tournament(8);
+  buildBracket(t, rng(8));
+  const on = currentMatch(t);
+  const g0 = on.gen || 0;
+  const other = t.matches.find(m => m.status === 'ready' && m !== on);
+  const before = currentMatch(t);
+  assert.ok(markLive(other, 'admin', undefined, t));
+  dropSkipped(t, before);
+  assert.equal(currentMatch(t), other);
+  assert.equal(on.gen || 0, g0 + 1, 'the skipped match keeps its room');
+  // the match on now played on one device: nothing skipped, nothing changes
+  const t2 = tournament(4);
+  buildBracket(t2, rng(4));
+  const on2 = currentMatch(t2), g2 = on2.gen || 0;
+  const b2 = currentMatch(t2);
+  markLive(on2, 'admin', undefined, t2);
+  dropSkipped(t2, b2);
+  assert.equal(on2.gen || 0, g2);
 });
 
 test('resetting a match bumps its generation; the match server rule and input delay', () => {

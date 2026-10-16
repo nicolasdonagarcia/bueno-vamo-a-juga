@@ -1,12 +1,13 @@
 'use client';
 /* One online match on this device.
    On the match server (transport 'server'), the server runs the match: both players
-   run their own copy a little ahead (prediction) and the organiser's screen draws the
-   server's snapshots. Peer to peer (transport 'p2p'), the left-hand player's browser
-   runs it instead.
+   run their own copy a little ahead (prediction) and viewers draw the server's
+   snapshots. Peer to peer (transport 'p2p'), the left-hand player's browser runs it
+   instead.
      host       player A, the left team (peer to peer: runs the physics, connects to the guest and viewers)
      guest      player B, the right team
-     spectator  the organiser (needs the admin key), usually on the big screen         */
+     spectator  a viewer: anyone with the cup's link on the match server (the match on now),
+                the organiser with the admin key (any match; peer to peer, only the organiser) */
 import { useEffect, useRef, useState } from 'react';
 import { resolveKits } from '@/lib/engine/shared';
 import { Snd } from '@/lib/engine/sound';
@@ -60,7 +61,7 @@ type Props = {
   onLocal?: () => void;            // player A: move the match to this device
   onEnded?: () => void;            // called a few seconds after the result is on screen
   full?: boolean;
-  adminKey?: string | null;        // spectator: only the organiser can watch
+  adminKey?: string | null;        // spectator: the organiser's key (any match); without it, anyone watches the match on now (peer to peer: only the organiser)
   netLine?: boolean;               // show the network line under the pitch
 };
 
@@ -228,7 +229,8 @@ export default function MatchStage(p: Props) {
           fakeLag,
           getTicket: async () => {
             try {
-              const r = await api<{ ticket: string; url: string }>(base + '/ticket', me >= 0 ? { token: P.token } : { key: P.adminKey });
+              // a player's seat; the organiser (admin key) watching; or anyone else watching the match on now
+              const r = await api<{ ticket: string; url: string }>(base + '/ticket', me >= 0 ? { token: P.token } : P.adminKey ? { key: P.adminKey } : { watch: true });
               return { ticket: r.ticket, url: wsUrl(r.url) };
             } catch (e) {
               if (e instanceof ApiError && (e.status === 403 || e.status === 404 || e.status === 410)) {
@@ -558,7 +560,7 @@ function DeniedCard({ why, onExit }: { why: string; onExit: () => void }) {
   );
 }
 
-// what the organiser sees over a match they watch
+// what a viewer sees over a match they watch (the organiser, or anyone with the cup's link)
 function ViewerOverlay({ ui, m, pa, pb, result, nextLabel, server, onExit }: {
   ui: Ui; m: PublicMatch; pa: PublicPlayer; pb: PublicPlayer; nextLabel?: string | null; server: boolean; onExit: () => void;
   result: { winner: string | null; score: [number, number]; via?: string } | null;
@@ -569,8 +571,9 @@ function ViewerOverlay({ ui, m, pa, pb, result, nextLabel, server, onExit }: {
   if (ui.denied && !end) {
     return (
       <div className="ovl"><div className="card tight">
-        <p className="lead">{ui.denied === 'version' ? 'The cup was updated: reload this page.' : 'Only the organiser can watch matches.'}</p>
-        {ui.denied !== 'version' ? <p className="note small">Open the big screen from the admin page.</p> : null}
+        <p className="lead">{ui.denied === 'version' ? 'The cup was updated: reload this page.'
+          : ui.denied === 'full' ? 'A lot of people are watching this match.' : 'Can’t watch this match right now.'}</p>
+        {ui.denied !== 'version' ? <p className="note small">{server ? 'Reload the page in a moment to try again.' : 'Only the organiser can watch peer-to-peer matches.'}</p> : null}
       </div></div>
     );
   }
