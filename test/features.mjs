@@ -259,8 +259,11 @@ await step('admin', 'admin page: share, copy, rules, players, draw, results, res
   await p.getByLabel(/Equal delay instead of prediction/).uncheck();
   await p.getByRole('button', { name: 'Save rules' }).click();
   await until(async () => (await c.view()).rules.equalDelay === false, 5000, 'prediction back on');
-  // players: remove one
+  // players: remove one (the × asks first; Keep leaves them in)
   await p.getByRole('button', { name: 'Remove Ed' }).click();
+  await p.getByRole('button', { name: 'Keep' }).click();
+  await p.getByRole('button', { name: 'Remove Ed' }).click();
+  await p.getByRole('button', { name: 'Yes, remove Ed' }).click();
   await until(async () => (await c.view()).players.length === 4, 5000, 'Ed removed');
   await p.getByText(/rounds · about/).waitFor({ timeout: 5000 });
   await p.screenshot({ path: OUT + '/admin-lobby.png', fullPage: true });
@@ -548,6 +551,14 @@ await step('screen-lobby', 'big screen lobby: QR, arrivals as they join, the dra
   for (const n of ['Ana', 'Ben', 'Cy']) await call('/api/t/' + c.code + '/join', { name: n, flag: 'se', color: 'teal' });
   await until(async () => (await s.locator('.arrivals b').textContent()) === '3', 6000, 'arrivals count');
   await s.getByText('Cy', { exact: true }).waitFor({ timeout: 5000 });
+  // Ben's browser froze and he joined again from another one: the old entry goes, from the big screen
+  const ben2 = await call('/api/t/' + c.code + '/join', { name: 'Ben', flag: 'ar', color: 'red' });
+  await s.getByText('Ben 2', { exact: true }).waitFor({ timeout: 6000 });
+  await s.getByRole('button', { name: 'Remove Ben', exact: true }).click();
+  await s.screenshot({ path: OUT + '/screen-lobby-remove.png' });
+  await s.getByRole('button', { name: 'Yes, remove Ben', exact: true }).click();
+  await until(async () => { const v = await c.view(); return v.players.length === 3 && v.players.some(x => x.id === ben2.playerId && x.name === 'Ben'); }, 6000, 'one Ben, with his name back');
+  await s.getByText('Ben 2', { exact: true }).waitFor({ state: 'detached', timeout: 6000 });
   await s.screenshot({ path: OUT + '/screen-lobby.png' });
   await s.getByRole('button', { name: 'Make the draw' }).click();
   await s.locator('.tile').first().waitFor({ timeout: 10000 });

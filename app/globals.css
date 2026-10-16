@@ -359,6 +359,13 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .share-links { flex: 1; min-width: 220px; gap: 8px; }
 .narrow-card { max-width: 560px; margin: 24px auto; }
 .roster .p .icon-btn { margin-left: 4px; }
+/* removing a player: the row asks Remove / Keep first */
+.btn.tiny { font-size: 13px; padding: 5px 9px; border-radius: 9px; }
+.rm-ask { display: flex; gap: 6px; flex: 1 0 100%; justify-content: flex-end; }
+.roster .p:has(.rm-ask) { flex-wrap: wrap; row-gap: 8px; border-color: rgba(255, 159, 176, .7); background: rgba(255, 159, 176, .08); }
+/* on the shared big screen the × stays faint until the organiser points at it */
+.big-roster .p .icon-btn.rm { opacity: .3; transition: opacity .15s; }
+.big-roster .p:hover .icon-btn.rm, .big-roster .p .icon-btn.rm:focus-visible { opacity: 1; }
 .match-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .match-row { border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, .03); padding: 8px 10px; }
 .match-row.live { border-color: rgba(255, 77, 109, .6); }

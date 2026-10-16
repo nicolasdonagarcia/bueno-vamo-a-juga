@@ -163,3 +163,26 @@ export type PublicPlayer = PublicTournament['players'][number];
 export function cleanName(s: unknown): string {
   return String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 18);
 }
+
+// The organiser takes a player out of the lobby, usually a second entry: someone whose
+// browser froze joined again from another one, and the join gave them a numbered name
+// ("Ana 2"). With the old "Ana" gone, the lowest-numbered copy gets the plain name back.
+// False when there is no such player.
+export function removePlayer(t: Tournament, playerId: string): boolean {
+  const gone = t.players.find(p => p.id === playerId);
+  if (!gone) return false;
+  t.players = t.players.filter(p => p.id !== playerId);
+  const base = gone.name.slice(0, 15).toLowerCase();       // as the join numbers names
+  let copy: Player | null = null, lowest = Infinity;
+  for (const p of t.players) {
+    const m = /^(.*) (\d+)$/.exec(p.name);
+    const n = m ? Number(m[2]) : 0;
+    if (m && n >= 2 && m[1].toLowerCase() === base && n < lowest) { copy = p; lowest = n; }
+  }
+  if (copy) {
+    const own = copy.name.replace(/ \d+$/, '');
+    const plain = own.toLowerCase() === gone.name.toLowerCase() ? own : gone.name;      // a long name was cut short to fit the number
+    if (!t.players.some(p => p !== copy && p.name.toLowerCase() === plain.toLowerCase())) copy.name = plain;
+  }
+  return true;
+}

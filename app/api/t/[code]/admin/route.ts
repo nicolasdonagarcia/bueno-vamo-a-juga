@@ -1,6 +1,6 @@
 // Admin actions, authorised by the admin key from the creation link.
 import { getStore } from '@/lib/store';
-import { applyResult, buildBracket, cleanName, getMatch, markLive, resetMatch, type Tournament } from '@/lib/tournament';
+import { applyResult, buildBracket, cleanName, getMatch, markLive, removePlayer, resetMatch, type Tournament } from '@/lib/tournament';
 import { body, busy, fail, isAdmin, json, loadOr404 } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
@@ -55,8 +55,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         return doc;
       case 'remove':
         if (doc.status !== 'lobby') { error = 'Players can only be removed before the start.'; return null; }
-        doc.players = doc.players.filter(p => p.id !== b.playerId);
-        return doc;
+        return removePlayer(doc, String(b.playerId || '')) ? doc : null;
       case 'result': {
         const side = b.winner === 'b' ? 'b' : b.winner === 'a' ? 'a' : null;
         if (!side) { error = 'Pick a winner.'; return null; }

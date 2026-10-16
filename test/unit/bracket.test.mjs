@@ -1,7 +1,7 @@
 // Bracket logic: seeding, byes, advancing, corrections. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, DEFAULT_RULES } from '../../lib/tournament.ts';
+import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, DEFAULT_RULES } from '../../lib/tournament.ts';
 
 function tournament(n) {
   return {
@@ -96,4 +96,25 @@ test('results: no double reporting, admin can correct until the next match start
   // correcting the final reopens the tournament result
   assert.equal(applyResult(t, final.id, 'a', [5, 4], 'admin', true), null);
   assert.equal(t.champion, m1.b);
+});
+
+test('removing a second entry: the numbered copy gets the plain name back', () => {
+  const t = tournament(0);
+  const add = (id, name) => t.players.push({ id, name, flag: 'un', color: 'orange', tokenHash: '', joinedAt: 0 });
+  add('a', 'Ana'); add('b', 'Ben'); add('a2', 'ana 2'); add('a3', 'Ana 3');
+  assert.equal(removePlayer(t, 'nobody'), false);
+  assert.equal(removePlayer(t, 'a'), true);
+  assert.deepEqual(t.players.map(p => p.name), ['Ben', 'ana', 'Ana 3']);          // the lowest number, in its own spelling
+  // a long name was cut short to fit the number: it gets the whole name back
+  add('c', 'Christopher Smith'); add('c2', 'Christopher Smi 2');
+  removePlayer(t, 'c');
+  assert.equal(t.players.find(p => p.id === 'c2').name, 'Christopher Smith');
+  // removing the numbered one leaves the others alone
+  add('d', 'Dee'); add('d2', 'Dee 2');
+  removePlayer(t, 'd2');
+  assert.deepEqual(t.players.filter(p => p.id[0] === 'd').map(p => p.name), ['Dee']);
+  // a name nobody else had: nothing else changes
+  const before = t.players.map(p => p.name).join();
+  removePlayer(t, 'b');
+  assert.equal(t.players.map(p => p.name).join(), before.replace('Ben,', ''));
 });

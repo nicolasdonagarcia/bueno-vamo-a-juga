@@ -63,6 +63,23 @@ export function QR({ text, label }: { text: string; label?: string }) {
   return <div className="qr" role="img" aria-label={label || 'QR code for ' + text} dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
+// The organiser taking a player out of the lobby (typically a second entry left behind by a
+// frozen browser): × first, then Remove / Keep, so a slip of the mouse doesn't do it.
+export function RemovePlayer({ name, onRemove }: { name: string; onRemove: () => Promise<unknown> }) {
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!ask) {
+    return <button type="button" className="icon-btn rm" aria-label={'Remove ' + name} title={'Remove ' + name} onClick={() => setAsk(true)}>×</button>;
+  }
+  return (
+    <span className="rm-ask">
+      <button type="button" className="btn danger tiny" disabled={busy} aria-label={'Yes, remove ' + name}
+        onClick={async () => { setBusy(true); try { await onRemove(); } finally { setBusy(false); setAsk(false); } }}>Remove</button>
+      <button type="button" className="btn ghost tiny" disabled={busy} onClick={() => setAsk(false)}>Keep</button>
+    </span>
+  );
+}
+
 export function Loading({ text = 'Loading…' }: { text?: string }) {
   return <div className="loading" role="status"><span className="spinner" aria-hidden="true" />{text}</div>;
 }

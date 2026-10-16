@@ -149,6 +149,22 @@ await group('organiser: rules are clamped, rename, remove players', async () => 
   assert.equal(again.you, null);
 });
 
+await group('organiser: someone who joined twice (a frozen browser) keeps one entry and their name', async () => {
+  const c = await cup(2);
+  const second = await ok('/api/t/' + c.code + '/join', { name: 'p1', flag: 'ar', color: 'red' });       // from another browser
+  let v = await view(c.code);
+  assert.deepEqual(v.players.map(p => p.name), ['P1', 'P2', 'p1 2']);
+  assert.equal((await c.admin('remove', { playerId: c.players[0].playerId })).status, 200);
+  v = await view(c.code);
+  assert.deepEqual(v.players.map(p => p.name), ['P2', 'p1']);
+  assert.equal(v.players.find(p => p.name === 'p1').id, second.playerId);
+  assert.equal((await view(c.code, '?me=' + c.players[0].token)).you, null);       // the frozen browser's entry is gone
+  assert.equal((await view(c.code, '?me=' + second.token)).you, second.playerId);
+  // not once the draw is made
+  await c.admin('start');
+  assert.equal((await c.admin('remove', { playerId: second.playerId })).status, 409);
+});
+
 await group('the draw: needs two players, byes go through, entries close', async () => {
   const solo = await cup(1);
   assert.equal((await solo.admin('start')).status, 409);

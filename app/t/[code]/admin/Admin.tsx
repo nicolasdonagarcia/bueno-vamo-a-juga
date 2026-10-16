@@ -2,7 +2,7 @@
 // The organiser's page: share links, players, rules, the draw, and fixing results.
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Brand, CopyButton, Loading, PlayerChip, QR } from '@/components/bits';
+import { Brand, CopyButton, Loading, PlayerChip, QR, RemovePlayer } from '@/components/bits';
 import { ApiError, api, fmtTime, playerOf, useIdentity, useTournament, type View } from '@/lib/client';
 import type { PublicMatch, Rules } from '@/lib/tournament';
 
@@ -137,13 +137,13 @@ function LobbyAdmin({ t, act }: { t: View; act: Act }) {
             <li key={p.id} className="p">
               <PlayerChip p={p} />
               <span className={'online' + (t.online[p.id] ? ' on' : '')} title={t.online[p.id] ? 'Online' : 'Not seen recently'} />
-              <button type="button" className="icon-btn" aria-label={'Remove ' + p.name} disabled={!!a.busy}
-                onClick={() => a.run('rm' + p.id, 'remove', { playerId: p.id })}>×</button>
+              <RemovePlayer name={p.name} onRemove={() => a.run('rm' + p.id, 'remove', { playerId: p.id })} />
             </li>
           ))}
         </ul>
       ) : <p className="note">Nobody has joined yet. Put the big screen up so people can scan the code.</p>}
       <p className="note small">{estimate(t.players.length, t.rules) || 'You need at least two players.'}</p>
+      {t.players.length ? <p className="note small">Someone listed twice after their browser froze? Remove the entry without a green dot. The one left gets the plain name back (Ana, not Ana 2).</p> : null}
       {a.error ? <p className="error">{a.error}</p> : null}
       <div className="row">
         <button type="button" className="btn big" disabled={t.players.length < 2 || !!a.busy} onClick={() => a.run('start', 'start')}>

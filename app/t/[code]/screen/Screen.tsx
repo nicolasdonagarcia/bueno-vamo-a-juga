@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bracket } from '@/components/Bracket';
 import GameView from '@/components/GameView';
 import MatchStage from '@/components/MatchStage';
-import { Brand, Loading, PlayerChip, QR } from '@/components/bits';
+import { Brand, Loading, PlayerChip, QR, RemovePlayer } from '@/components/bits';
 import { ChampionBanner } from '@/components/Champion';
 import { ApiError, api, playerOf, rulesLine, useIdentity, useTournament, type View } from '@/lib/client';
 import { roundName, type PublicMatch } from '@/lib/tournament';
@@ -111,6 +111,13 @@ export default function Screen({ code }: { code: string }) {
     catch (e) { setActionError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
+  // a second entry left behind by a frozen browser, say
+  async function remove(playerId: string) {
+    if (!key) return;
+    setActionError('');
+    try { await api('/api/t/' + code + '/admin', { key, action: 'remove', playerId }); await refresh(); }
+    catch (e) { setActionError(e instanceof Error ? e.message : String(e)); }
+  }
 
   if (t.status === 'lobby') {
     return (
@@ -144,7 +151,13 @@ export default function Screen({ code }: { code: string }) {
           </div>
         </section>
         <ul className="roster big-roster">
-          {t.players.map(p => <li key={p.id} className="p arrive"><PlayerChip p={p} /><span className={'online' + (t.online[p.id] ? ' on' : '')} /></li>)}
+          {t.players.map(p => (
+            <li key={p.id} className="p arrive">
+              <PlayerChip p={p} />
+              <span className={'online' + (t.online[p.id] ? ' on' : '')} title={t.online[p.id] ? 'Online' : 'Not seen recently'} />
+              <RemovePlayer name={p.name} onRemove={() => remove(p.id)} />
+            </li>
+          ))}
         </ul>
       </main>
     );
