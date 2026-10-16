@@ -25,6 +25,7 @@ export type Tournament = {
   rules: Rules; players: Player[]; matches: Match[]; rounds: number;
   champion: string | null; startedAt?: number; finishedAt?: number;
   upNext?: string | null;         // the organiser picked this match to be played next
+  genBase?: number;               // a new draw's matches start their generation here, above every earlier draw's
 };
 
 // one match at a time: about 90 seconds a match fits 15 matches (16 players) into a 30-minute slot
@@ -72,6 +73,22 @@ export function seedOrder(size: number): number[] {
 
 export function matchId(round: number, index: number) { return 'r' + round + 'm' + (index + 1); }
 
+// Match ids repeat from one draw to the next (r1m1...), so a new draw's matches carry on
+// counting generations above the old ones: a match server room still open from the old
+// draw is then closed when the new match opens, and its late reports are refused.
+function keepGens(t: Tournament): number {
+  let base = t.genBase || 0;
+  for (const m of t.matches || []) base = Math.max(base, (m.gen || 0) + 1);
+  t.genBase = base;
+  return base;
+}
+
+// back to the lobby: the players stay, the bracket goes
+export function restartCup(t: Tournament) {
+  keepGens(t);
+  t.status = 'lobby'; t.matches = []; t.rounds = 0; t.champion = null; t.startedAt = undefined; t.finishedAt = undefined; t.upNext = null;
+}
+
 export function buildBracket(t: Tournament, rand: () => number = Math.random) {
   const ps = t.players.slice();
   for (let i = ps.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [ps[i], ps[j]] = [ps[j], ps[i]]; }
@@ -80,11 +97,13 @@ export function buildBracket(t: Tournament, rand: () => number = Math.random) {
   while (size < n) size *= 2;
   const rounds = Math.log2(size);
   const order = seedOrder(size);
+  const base = keepGens(t);
   const matches: Match[] = [];
   for (let r = 1; r <= rounds; r++) {
     const count = size / 2 ** r;
     for (let i = 0; i < count; i++) {
       const m: Match = { id: matchId(r, i), round: r, index: i, a: null, b: null, status: 'waiting', score: [0, 0], winner: null };
+      if (base) m.gen = base;
       if (r === 1) {
         const sa = order[i * 2], sb = order[i * 2 + 1];
         m.a = sa <= n ? ps[sa - 1].id : null;

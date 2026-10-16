@@ -112,10 +112,10 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
           : pa.name + ' moved this match onto their device, so you two play side by side there.'}
       href={hubHref} />;
   } else if (role === 'host-local' || role === 'admin-local') {
-    body = reporter ? <LocalStage key={role} m={m} pa={pa} pb={pb} reporter={reporter} resumeScore={resume} nextLabel={nextLabel} onExit={back} full /> : <Loading />;
+    body = reporter ? <LocalStage key={role + ':' + (m.gen || 0)} m={m} pa={pa} pb={pb} reporter={reporter} resumeScore={resume} nextLabel={nextLabel} onExit={back} full /> : <Loading />;
   } else {
     body = (
-      <MatchStage key={role} role={role} transport={m.rules.net === 'server' ? 'server' : 'p2p'} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
+      <MatchStage key={role + ':' + (m.gen || 0)} role={role} transport={m.rules.net === 'server' ? 'server' : 'p2p'} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
         resumeScore={resume} nextLabel={nextLabel} serverResult={serverResult} full netLine
         onExit={back} onEnded={botSkill ? back : undefined}
         onLocal={role === 'host' ? () => { setResume(m.status === 'live' ? m.score : null); setRole('host-local'); } : undefined} />

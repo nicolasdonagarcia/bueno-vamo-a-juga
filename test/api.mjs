@@ -508,6 +508,15 @@ await group('tickets for the match server: your match when it\'s on, the organis
     const t2 = decode((await tk(m2.id, { token: tokenOf(c, m2.b) })).j.ticket);
     assert.deepEqual([t2.st, t2.sc], ['live', [1, 2]]);
   }
+  // back to the lobby and a new draw: the same match ids, but tickets of a newer generation
+  // (so the match server closes the old draw's room), and the old draw's reports are refused
+  const g0 = decode(o1.j.ticket).g;
+  await c.admin('restart');
+  await c.admin('start');
+  const n1 = (await view(c.code)).matches.find(m => m.id === m2.id);
+  const g1 = decode((await tk(n1.id, { key: c.adminKey })).j.ticket).g;
+  assert.ok(g1 > g0, 'new draw generation ' + g1 + ' above ' + g0);
+  if (SECRET) assert.match(await err(409, '/api/t/' + c.code + '/m/' + n1.id + '/report', { kind: 'score', score: [1, 0], gen: g0 }, { 'x-cc-server': SECRET }), /reset/);
 });
 
 await group('reports from the match server: the shared secret, start, goals, result, a reset match', async () => {

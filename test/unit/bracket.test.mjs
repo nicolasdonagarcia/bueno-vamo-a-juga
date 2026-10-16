@@ -1,7 +1,7 @@
 // Bracket logic: seeding, byes, advancing, corrections. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, markLive, currentMatch, matchQueue, playingOrder, publicView, netRule, DEFAULT_RULES } from '../../lib/tournament.ts';
+import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, restartCup, markLive, currentMatch, matchQueue, playingOrder, publicView, netRule, DEFAULT_RULES } from '../../lib/tournament.ts';
 
 function tournament(n) {
   return {
@@ -196,4 +196,21 @@ test('resetting a match bumps its generation; the match server rule and input de
   assert.equal(v.current, m.id);
   assert.equal(v.matchServer, true);
   assert.deepEqual(v.queue, [m.id]);
+});
+
+test('a new draw after going back to the lobby counts generations above the old draw', () => {
+  const t = tournament(4);
+  buildBracket(t, rng(3));
+  assert.equal(t.matches[0].gen, undefined);
+  resetMatch(t, 'r1m1'); resetMatch(t, 'r1m1');           // r1m1 is at 2 now
+  restartCup(t);
+  assert.equal(t.status, 'lobby');
+  assert.equal(t.matches.length, 0);
+  buildBracket(t, rng(4));
+  for (const m of t.matches) assert.equal(m.gen, 3, m.id + ' starts above every old r1m1');
+  resetMatch(t, 'r1m2');
+  assert.equal(t.matches.find(m => m.id === 'r1m2').gen, 4);
+  restartCup(t);
+  buildBracket(t, rng(5));
+  for (const m of t.matches) assert.equal(m.gen, 5);
 });

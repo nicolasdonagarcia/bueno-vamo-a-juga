@@ -25,7 +25,7 @@ const { chromium } = createRequire(import.meta.url)('playwright');
 
 const BASE = process.env.BASE || 'http://localhost:3000';
 const OUT = process.env.OUT || 'test-results';
-const ONLY = (process.env.ONLY || 'A,B,C,D,E,F,G,H,I,J,K,P,Q').split(',');
+const ONLY = (process.env.ONLY || 'A,B,C,D,E,F,G,H,I,J,K,P,Q,R').split(',');
 mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -426,6 +426,43 @@ await scenario('Q', 'peer to peer: the guest\'s connection drops for a few secon
   await H.context().close(); await G.context().close();
   return 'playing again ' + back + 's after the network came back';
 }, false);
+
+// ---------------------------------------------------------------- R
+// Found on the droplet (16 October): one player closed their tab mid-match, the organiser went
+// back to the lobby and made the draw again, and the new r1m1 opened onto the old match (its
+// score and clock), because the match server's room for the old r1m1 was still open.
+await scenario('R', 'back to the lobby mid-match and a new draw: the new match starts fresh, not the old one', async () => {
+  const c = await cup({ goals: 9, capSec: 90, finalGoals: 9, finalCapSec: 90, modifiers: false });
+  const path = '/t/' + c.code + '/m/' + c.m.id;
+  const H = await open(c.code, { player: c.host }, path);
+  const G = await open(c.code, { player: c.guest }, path);
+  await readyBoth(H, G);
+  await until(async () => (await clock(H)) > 14, 25000, 'some of the match played');
+  const old = await clock(H);           // the room's clock (warm-up and countdown included)
+  await G.context().close();                                   // one player closes their tab
+  await H.getByText(c.guest.name + ' lost the connection').waitFor({ timeout: 10000 });
+  await call('/api/t/' + c.code + '/admin', { key: c.adminKey, action: 'restart' });
+  await call('/api/t/' + c.code + '/admin', { key: c.adminKey, action: 'start' });
+  const v = await call('/api/t/' + c.code);
+  const m = v.matches.find(x => x.id === v.current);
+  check(m.id === c.m.id, 'expected the same match id again, got ' + m.id);
+  const ps = { [c.host.playerId]: c.host, [c.guest.playerId]: c.guest };
+  // the old page (H) stays open, as it did on the droplet; the other player opens the new match
+  const other = ps[m.a] === c.host ? ps[m.b] : ps[m.a];
+  const G2 = await open(c.code, { player: other }, path);
+  await G2.getByRole('button', { name: 'I\'m ready' }).waitFor({ timeout: 15000 });
+  // the old page gets the new match too: a ready check of its own (not still ready from the
+  // old match), not the old match carrying on
+  await H.getByRole('button', { name: 'I\'m ready' }).waitFor({ timeout: 15000 });
+  await H.screenshot({ path: OUT + '/R-old-page.png' });
+  await readyBoth(H, G2);
+  await sleep(1500);
+  const t = await clock(G2);
+  check(t < old, 'the new room\'s clock is at ' + t.toFixed(1) + ' s, past the old one\'s ' + old.toFixed(1) + ' s: the old match carried on');
+  check(String(await engineScore(H)) === '0,0' && String(await engineScore(G2)) === '0,0', 'scores ' + await engineScore(H) + ' / ' + await engineScore(G2));
+  const role = await cc(H, () => window.__cc.role);
+  return 'the old page moved to the new match as ' + role + ', room clock ' + t.toFixed(1) + ' s (the old one was at ' + old.toFixed(1) + ' s)';
+});
 
 console.log('\n' + results.map(r => r.join('  ')).join('\n'));
 console.log('page errors:', errors.length ? errors : 'none');

@@ -1,6 +1,6 @@
 // Admin actions, authorised by the admin key from the creation link.
 import { getStore } from '@/lib/store';
-import { applyResult, buildBracket, cleanName, getMatch, markLive, removePlayer, resetMatch, type Tournament } from '@/lib/tournament';
+import { applyResult, buildBracket, cleanName, getMatch, markLive, removePlayer, resetMatch, restartCup, type Tournament } from '@/lib/tournament';
 import { body, busy, fail, isAdmin, json, loadOr404 } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +36,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         buildBracket(doc);
         return doc;
       case 'restart':
-        doc.status = 'lobby'; doc.matches = []; doc.rounds = 0; doc.champion = null; doc.startedAt = undefined; doc.finishedAt = undefined; doc.upNext = null;
+        restartCup(doc);
         return doc;
       case 'rules': {
         const x = (b.rules || {}) as Record<string, unknown>;
