@@ -14,6 +14,7 @@ export type GameHooks = {
   onPress?: (slots: number[], viewTime?: number, tick?: number, seq?: number) => void;
   onFullState?: (buf: ArrayBuffer) => void;                   // host: the full state for a predicting guest
   onPressAck?: (seq: number, slack: number) => void;          // host: a guest press arrived with `slack` ticks to spare
+  onHostPress?: (slot: number, tick: number, lean: number, round: number) => void;   // host: its own press, for the guest's copy
   onScore?: (score: [number, number], info: { team: number; own: boolean; over: boolean }) => void;
   onEnd?: (e: { winner: number; score: [number, number]; reason: string }) => void;
   onEndShown?: (e: EndEvent) => void;

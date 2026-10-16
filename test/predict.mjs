@@ -60,7 +60,8 @@ for (const [name, force] of ROUNDS) {
         onSnapshot: buf => toGuest(() => guest && guest.pushSnapshot(buf), false),
         onFullState: buf => toGuest(() => guest && guest.pushSnapshot(buf), false),
         onEvent: ev => toGuest(() => guest && guest.applyRemoteEvent(ev), true),
-        onPressAck: (q, sl) => toGuest(() => guest && guest.pressAck(q, sl), true)
+        onPressAck: (q, sl) => toGuest(() => guest && guest.pressAck(q, sl), true),
+        onHostPress: (s, n, l, r) => toGuest(() => guest && guest.hostPress(s, n, l, r), true)
       } });
     host.setViewDelay(0);
     guest = window.__createGame(box.children[1], { mode: 'guest', rules: { goals: 99, capSec: 0, modifiers: true }, sound: false,

@@ -183,6 +183,7 @@ export default function MatchStage(p: Props) {
           onSnapshot: (buf: ArrayBuffer) => link?.sendState(buf),
           onFullState: (buf: ArrayBuffer) => link?.sendState(buf, 'guest'),
           onPressAck: (seq: number, slack: number) => link?.send({ k: 'pa', q: seq, sl: slack }, 'guest'),
+          onHostPress: (s: number, n: number, l: number, r: number) => link?.send({ k: 'hp', s, n, l, r }, 'guest'),
           onEvent: (ev: unknown) => link?.send({ k: 'ev', ev }),
           onPress: (s: number[], vt?: number, n?: number, seq?: number) => link?.send({ k: 'press', s, vt, n, q: seq }),
           onScore: (sc: [number, number], info: { over: boolean }) => {
@@ -262,6 +263,7 @@ export default function MatchStage(p: Props) {
               case 'resume': set({ paused: true, resumeAt: Date.now() + Number(msg.ms || 3000) }); break;
               case 'resumed': set({ paused: false, resumeAt: null }); break;
               case 'pa': g.pressAck(Number(msg.q), Number(msg.sl)); break;
+              case 'hp': g.hostPress(Number(msg.s), Number(msg.n), Number(msg.l), Number(msg.r)); break;
             }
           },
           onRtt: (rtt: number) => {
