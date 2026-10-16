@@ -1,7 +1,7 @@
 // Bracket logic: seeding, byes, advancing, corrections. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, DEFAULT_RULES } from '../../lib/tournament.ts';
+import { seedOrder, buildBracket, applyResult, resetMatch, roundName, rulesFor, removePlayer, markLive, currentMatch, matchQueue, playingOrder, publicView, netRule, DEFAULT_RULES } from '../../lib/tournament.ts';
 
 function tournament(n) {
   return {
@@ -42,6 +42,8 @@ test('16 players: 8 + 4 + 2 + 1 matches, every player once in round 1', () => {
   assert.equal(roundName(4, 4), 'Final');
   assert.equal(rulesFor(t, 4).goals, 5);
   assert.equal(rulesFor(t, 1).goals, 3);
+  assert.equal(rulesFor(t, 1).capSec, 90);
+  assert.equal(rulesFor(t, 4).capSec, 150);
 });
 
 test('a full 16-player knockout crowns one champion', () => {
@@ -117,4 +119,81 @@ test('removing a second entry: the numbered copy gets the plain name back', () =
   const before = t.players.map(p => p.name).join();
   removePlayer(t, 'b');
   assert.equal(t.players.map(p => p.name).join(), before.replace('Ben,', ''));
+});
+
+test('one match at a time: bracket order, byes skipped, the next pair called when one ends', () => {
+  const t = tournament(6);                     // 8 slots: 2 byes in round 1
+  buildBracket(t, rng(6));
+  const order = playingOrder(t).map(m => m.id);
+  assert.deepEqual(order, ['r1m1', 'r1m2', 'r1m3', 'r1m4', 'r2m1', 'r2m2', 'r3m1']);
+  const played = [];
+  for (let guard = 0; guard < 20 && t.status === 'running'; guard++) {
+    const cur = currentMatch(t);
+    assert.ok(cur, 'a match is always on while the cup runs');
+    assert.equal(cur.status, 'ready');
+    assert.ok(cur.a && cur.b);
+    // the queue starts with it and holds everything still to play, in order
+    const q = matchQueue(t);
+    assert.equal(q[0], cur);
+    assert.deepEqual(q.map(m => m.id), order.filter(id => t.matches.find(m => m.id === id).status !== 'done'));
+    assert.ok(markLive(cur, undefined, 'server', t));
+    assert.equal(currentMatch(t), cur, 'a live match stays the current one');
+    played.push(cur.id);
+    assert.equal(applyResult(t, cur.id, 'a', [3, 1], 'played'), null);
+  }
+  assert.equal(t.status, 'finished');
+  assert.equal(currentMatch(t), null);
+  // byes never come up; everything else in bracket order
+  const byes = t.matches.filter(m => m.via === 'bye').map(m => m.id);
+  assert.equal(byes.length, 2);
+  assert.deepEqual(played, order.filter(id => !byes.includes(id)));
+});
+
+test('one match at a time: the organiser can pick the next match, and a walkover moves the cup on', () => {
+  const t = tournament(8);
+  buildBracket(t, rng(8));
+  assert.equal(currentMatch(t).id, 'r1m1');
+  t.upNext = 'r1m3';                            // someone in r1m1 is late
+  assert.equal(currentMatch(t).id, 'r1m3');
+  assert.deepEqual(matchQueue(t).slice(0, 3).map(m => m.id), ['r1m3', 'r1m1', 'r1m2']);
+  markLive(t.matches.find(m => m.id === 'r1m3'), undefined, undefined, t);
+  assert.equal(t.upNext, null, 'the pick is used up once it kicks off');
+  applyResult(t, 'r1m3', 'b', [0, 2], 'played');
+  assert.equal(currentMatch(t).id, 'r1m1');
+  // a walkover for the match on now: the next one is called
+  applyResult(t, 'r1m1', 'a', [0, 0], 'walkover', true);
+  assert.equal(currentMatch(t).id, 'r1m2');
+  // a pick that is not ready is ignored
+  t.upNext = 'r2m2';
+  assert.equal(currentMatch(t).id, 'r1m2');
+  // a match played out of turn on one device counts as the live one
+  markLive(t.matches.find(m => m.id === 'r1m4'), 'admin', undefined, t);
+  assert.equal(currentMatch(t).id, 'r1m4');
+});
+
+test('resetting a match bumps its generation; the match server rule and input delay', () => {
+  const t = tournament(2);
+  buildBracket(t, rng(2));
+  const m = t.matches[0];
+  markLive(m, undefined, 'server', t);
+  assert.equal(m.net, 'server');
+  assert.equal(resetMatch(t, m.id), null);
+  assert.equal(m.gen, 1);
+  assert.equal(m.net, undefined);
+  assert.equal(m.status, 'ready');
+  assert.equal(netRule({}, true), 'server');
+  assert.equal(netRule({ net: 'p2p' }, true), 'p2p');
+  assert.equal(netRule({ net: 'server' }, false), 'p2p', 'without a match server it is peer to peer');
+  assert.equal(rulesFor(t, 1, true).net, 'server');
+  assert.equal(rulesFor(t, 1, false).net, 'p2p');
+  assert.equal(rulesFor(t, 1, true).inputDelay, 2);
+  t.rules.inputDelay = 9;
+  assert.equal(rulesFor(t, 1, true).inputDelay, 4);
+  // a match keeps the way it was played once it kicked off
+  m.net = 'p2p';
+  assert.equal(rulesFor(t, 1, true, m).net, 'p2p');
+  const v = publicView(t, true);
+  assert.equal(v.current, m.id);
+  assert.equal(v.matchServer, true);
+  assert.deepEqual(v.queue, [m.id]);
 });

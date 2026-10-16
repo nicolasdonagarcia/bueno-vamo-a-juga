@@ -1,22 +1,24 @@
 # The Coterie Cup
 
-One-button ragdoll football as a 1v1 knockout cup for the office. Everyone plays on their own laptop or phone, the matches run peer to peer, and the bracket fills in on the big screen until one of you lifts the cup.
+One-button ragdoll football as a 1v1 knockout cup for the office. Everyone plays on their own laptop or phone, one match at a time, and the whole meeting watches that match live on the big screen until one of you lifts the cup.
+
+The live match runs on a small match server next to the site, so both players see the same match and the big screen draws it straight from there. It all fits on one DigitalOcean droplet, or on your own computer for a cup on the office Wi-Fi.
 
 ## Running the cup in a 30-minute meeting
 
 1. **Before the meeting**, open the site and press **Start a cup**. You land on the admin page. Keep that link to yourself, because it starts the draw and changes results.
 2. **When the meeting starts**, open the **big screen** from the admin page and share that window in your video call (in Zoom, tick *Share sound* if you want the crowd noise). It shows a QR code, the code and everyone who has joined, with a CPU match playing while people arrive. Only the organiser can open it.
 3. **Everyone scans the QR code** and picks a name, a flag and a kit colour. While they wait, they can warm up against the CPU.
-4. **Press "Make the draw"** on the big screen or the admin page. Each player sees **Your match is ready → Play**. Both players press **I'm ready** and the match starts.
-5. **Every match is on the big screen at once**, in a grid. Click a match, or press its number, to fill the screen with it; **Esc** or **All matches** goes back, and ← → move between matches. Only the match filling the screen plays sound. **Bracket** at the top switches to the bracket; the matches stay connected behind it.
-6. **Results go in by themselves.** Winners see their next match appear as soon as their opponent is known. Players only open their own matches: everyone follows the rest on the shared screen.
+4. **Press "Make the draw"** on the big screen or the admin page. **One match is played at a time**, in bracket order. The first pair sees **Your match is ready → Play**; everyone else sees how many matches come before theirs. Both players press **I'm ready** and the match starts.
+5. **The big screen shows the match on now**, live and with sound, and who's up next. When it ends, the result stays up for a few seconds and then the next match takes over. **Bracket** at the top switches to the bracket.
+6. **Results go in by themselves.** When it's their turn, the next pair's page beeps and shows **Play** (a page already open on their match starts it by itself), and winners see their next match as soon as their opponent is known. Players only open their own matches: everyone watches the rest on the shared screen.
 
-With 16 players there are 4 rounds. The default rules are:
+The default rules are:
 
-- **Matches:** first to 3 goals, with a 3-minute limit and then golden goal.
-- **Final:** first to 5 goals, with a 5-minute limit.
+- **Matches:** first to 3 goals, with a 90-second limit and then golden goal.
+- **Final:** first to 5 goals, with a 150-second limit.
 
-In the worst case that is about 20 minutes of play, so it fits a 30-minute slot. If time is short, set *first to 2* and a *2-minute limit* on the admin page before the draw.
+With 16 players that is 15 matches, one after another. If every match ran to its limit, with half a minute between matches, the cup would take about 31 minutes; most matches end at 3 goals well before the limit. The admin page shows this estimate for the players who have joined. If time is tight, set *first to 2* and a *1-minute limit* before the draw.
 
 **Controls:**
 
@@ -27,99 +29,128 @@ In the worst case that is about 20 minutes of play, so it fits a 30-minute slot.
 
 | Problem | What to do |
 | --- | --- |
-| Two players can't connect, usually on a locked-down office network | **The fix:** set up the free Cloudflare relay (see below). **On the day:** the left-hand player clicks **Play on this device** and both play side by side on one keyboard. Or the organiser presses **Play here** on the big screen. |
-| Someone doesn't turn up | Admin page → **Manage** on that match → *goes through* (walkover). |
+| Someone isn't there when their match is called | Admin page → **Manage** on another match → **Play this one next**, and come back to theirs later. If they don't turn up at all: **Manage** → *goes through* (walkover). |
 | Someone is listed twice (Ana and Ana 2), say their browser froze and they joined again from another one | Before the draw: on the big screen or the admin page, press **×** next to the entry without a green dot, then **Remove**. The other entry becomes plain Ana again. After the draw nobody new can join, so ask them to reopen the cup in the browser they joined with: their place is kept there. |
-| A laptop drops out mid-match | The match pauses and picks up again when they reconnect, usually within 10 seconds of their network coming back. If the left-hand player reloads, the match carries on from the saved score. |
-| The other player's men sometimes move a little fast or slide into place | That is prediction at work over a long distance (see *Lag* below), and only the right-hand player sees it: your own men react the moment you press, and your opponent's jumps reach you a moment late. They then play from the start a little faster until they have caught up, or, right next to the ball or your men, slide into place. If it ever looks wrong, tick **Equal delay instead of prediction** in the admin page's rules: both players then see their match equally late and nothing slides. |
+| A laptop drops out mid-match | The match pauses and carries on 3 seconds after they're back. A player who reloads goes straight back into the match where it is. |
+| The match server restarts mid-match (a deploy with `--now`, or a crash) | The pages reconnect by themselves and the match carries on from the saved score, with the clock starting again. |
+| A player can't reach the match server | It's an ordinary secure connection to the same address as the site, so office networks let it through. On the day, the left-hand player clicks **Play on this device** and both play side by side on one keyboard. Or the organiser presses **Play here** on the big screen. |
+| The other player's men sometimes move a little fast or slide into place | That is prediction at work (see *Lag* below). Your own men react as soon as you press (after the input delay, 33 ms by default); the other player's jumps reach you a moment late, then play from the start a little faster until they have caught up, or, right next to the ball or your men, slide into place. The line under the pitch shows the numbers: send them with **Copy the numbers**. A higher **input delay** in the admin page's rules means fewer corrections, and your own men answer a few hundredths of a second later. |
 | A result is wrong | Admin page → **Manage** → enter the right score. This works until the next match has started. |
 | You want to start again | Admin page → **Back to the lobby** keeps the players and clears the bracket. |
+| You want the old peer-to-peer matches back | Admin page → rules → **Online matches run**: *peer to peer*. Each match then runs in the left-hand player's browser, as before the match server. |
 
-## Deploying on Vercel
+## Running it on your own computer
 
-1. Put this folder in a GitHub repository.
-2. On [vercel.com](https://vercel.com), choose **Add New → Project** and import the repository. The defaults are right: the framework is Next.js and there are no build settings to change.
-3. In the new project, open **Storage**. Pick **Upstash for Redis** from the Marketplace, create a database on the free plan and connect it to the project for all environments. This adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
-4. Redeploy (**Deployments → ⋯ → Redeploy**) so the app picks the variables up.
-5. **Strongly recommended:** set up a relay for players whose network blocks direct connections (office networks and VPNs, some home routers, phones on mobile data). You can check it is on: `/api/ice` on your site says `"relay":true`.
-   1. In the Cloudflare dashboard, open **Realtime → TURN Server** and create a TURN key.
-   2. In Vercel, add `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN` under **Settings → Environment Variables**.
-   3. Redeploy.
-
-Without step 3, the deployed app refuses to create cups and says why. Its fallback memory store would give every server instance its own copy of the data.
-
-**Usage:** with 16 players and the big screen showing every match, the cup uses about 1,300 Redis commands a minute, so roughly 40,000 for a 30-minute meeting. Upstash's free plan allows 500,000 a month. Pages slow their polling once a cup is over or the tab is in the background.
-
-## Running it locally
+You need Node.js 22.18 or later (it runs the match server's TypeScript as it is).
 
 ```bash
 npm install
-npm run dev          # http://localhost:3000
+npm run dev          # the site on http://localhost:3000, the match server on port 3001
 ```
 
-Without the Redis variables it keeps everything in memory, which is fine for one local server. To play against yourself, open the cup in a normal window and in a private window: each browser profile is one player.
+`npm run dev` starts both and restarts the match server when its code changes. Without Redis it keeps everything in memory, which is fine for one computer. To play against yourself, open the cup in a normal window and in a private window: each browser profile is one player.
+
+**A cup on the office Wi-Fi:** run `npm run build` and then `npm start`, which runs the built site and the match server together. Everyone opens `http://<your computer's address>:3000` (on a Mac, *System Settings → Wi-Fi → Details* shows the address), and the match server is reached on the same address, port 3001. If your computer's firewall asks, allow incoming connections for Node. The cup is lost when you stop it; set `REDIS_URL` to keep it.
+
+To change anything, copy `.env.example` to `.env.local`: it lists every setting.
+
+## Running it on DigitalOcean
+
+Everything runs on one droplet: the site, the match server, Redis, and Caddy in front for HTTPS.
+
+1. **Create a droplet:** Ubuntu 24.04, *Basic*, *Regular* with 2 GB of memory and 1 CPU (about $12 a month at the time of writing). Pick the region closest to most players: the match server's distance is everyone's lag. Add your SSH key.
+2. **Point a domain at it:** an `A` record for, say, `cup.example.com` with the droplet's address. Caddy gets the HTTPS certificate by itself once the name resolves to the droplet.
+3. **Run the setup script** on the droplet, as root:
+
+   ```bash
+   ssh root@<droplet address>
+   curl -fsSL https://raw.githubusercontent.com/nicolasdonagarcia/bueno-vamo-a-juga/main/deploy/setup.sh -o setup.sh
+   bash setup.sh cup.example.com https://github.com/nicolasdonagarcia/bueno-vamo-a-juga.git main
+   ```
+
+   It installs Node.js 24, Redis (saved to disk every second), Caddy and the two services, makes a random `MATCH_SECRET`, builds the site and starts everything, then opens only SSH, HTTP and HTTPS in the firewall. Without a domain it serves plain HTTP on the droplet's address, which is fine for a test. Deploying a branch other than `main` (`match-server`, say): put its name in place of `main`, in the address and at the end.
+4. **Updates:** push to the branch, then run `ssh root@<droplet address> bash /srv/cup/deploy/deploy.sh`. The site restarts in a few seconds and pages carry on by themselves. The match server only restarts when its own code changed, and not while a match is live: run the script again after the match, or add `--now`.
+
+**What runs where:**
+
+| | |
+| --- | --- |
+| `cup-app` | The site and its API (`next start`), on 127.0.0.1:3000 |
+| `cup-match` | The match server, on 127.0.0.1:3001 |
+| `redis-server` | The cups, on 127.0.0.1:6379 |
+| `caddy` | HTTPS on ports 80 and 443: `/ws` goes to the match server, the rest to the site |
+| `/etc/cup.env` | The settings both services read (`systemctl restart cup-app cup-match` after a change) |
+
+Logs: `journalctl -u cup-match -f` (or `cup-app`). `curl -s localhost:3001/health` on the droplet lists the matches the match server has open.
 
 ## Tests
 
 ```bash
-npm test                                   # bracket logic: seeding, byes, results, corrections
+npm test                 # bracket logic: seeding, byes, the playing order, results, corrections
+npm run test:server      # the match server against two CPU players, one near and one far away:
+                         # every ball and crazy round, two whole matches, the results it reports,
+                         # a player whose network goes silent, the match server restarting mid-match
 ```
 
-The other tests need a running server. `test/api.mjs` only needs `npm run build && npm start`; it checks every API route with good and bad input, who may do what, and many requests at once. The browser tests drive real Chromium windows: CPU bots join, connect peer to peer, play and report. They need Playwright (`npm i -D playwright`) and a build with the test switch on:
+The other tests need a running site. `test/api.mjs` only needs `npm run build && npm start`; it checks every API route with good and bad input, who may do what, and many requests at once. The browser tests drive real Chromium windows: CPU bots join, connect, play and report. They need Playwright (`npm i -D playwright`) and a build with the test switch on:
 
 ```bash
 NEXT_PUBLIC_BOTS=1 npm run build && npm start
-node test/api.mjs                           # every API route: input, permissions, simultaneous writes
+node test/api.mjs                           # every API route: input, permissions, tickets, simultaneous writes
 node test/features.mjs                      # every page and button: practice, create, admin, joining, the player page,
                                             # keys, touch, mute, golden goal, time limits, phones, the big-screen lobby
-node test/scenarios.mjs                     # reloads, dropped connections, the organiser watching, one-device matches,
-                                            # walkovers, the big-screen grid, the dead-ball ring online
-PLAYERS=16 node test/e2e.mjs                # a whole cup, 8 matches at a time, every match on the big screen
+RESTART_MATCH_SERVER='pkill -TERM -f "server/mai[n].ts"' node test/scenarios.mjs
+                                            # reloads, dropped connections, the match server restarting (npm start
+                                            # brings it back), the organiser watching, one-device matches, walkovers,
+                                            # the big screen, peer to peer
+PLAYERS=16 node test/e2e.mjs                # a whole cup, one match at a time, the big screen following along
 node test/rounds.mjs                        # every ball and crazy round, drawn and played
-node test/lag.mjs 75 15                     # 75 ms each way, 15 ms jitter: how late presses show, on each screen
-node test/predict.mjs                       # the guest's copy against the host's match, in every ball and crazy round
+NEAR=5 node test/lag.mjs 75 15              # one player 5 ms from the match server, the other 75 ms and 15 ms
+                                            # of jitter: how late presses show on each screen (NET=p2p: peer to peer)
+node test/predict.mjs                       # a copy against the real match, in every ball and crazy round
 BASE=http://localhost:3000 node test/smoke.mjs    # screenshots of every page
 node test/physics.mjs 120 6                 # CPU v CPU without drawing: goals, falls, jump heights, hop distances
 HOPS=1 node test/physics.mjs 0 8            # each man hopping at the peak of his sway, forward and back
 MODS=1 node test/physics.mjs 600 3          # crazy rounds on, a long soak
 ```
 
-To run them against Redis instead of the memory store, start the server with `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` set (a free Upstash database works).
+To run them against Redis instead of the memory store, start the site with `REDIS_URL=redis://127.0.0.1:6379`.
 
-`?bot=0.7` only works in builds made with `NEXT_PUBLIC_BOTS=1`. That way nobody can let the CPU play for them in the real cup. The same goes for `?lag=75&jitter=15` on a match page (holds back what that side receives, like a long way round the world) and `?net=fair` (prediction off, like the *Equal delay* rule).
+`?bot=0.7` only works in builds made with `NEXT_PUBLIC_BOTS=1`. That way nobody can let the CPU play for them in the real cup. The same goes for `?lag=75&jitter=15` on a match page (holds back that page's connection, like a long way round the world), `?delay=0` (overrides the input delay) and, peer to peer, `?net=fair` (prediction off, like the *Equal delay* rule).
 
 ## How it is built
 
 - **Next.js 16 (App Router), React 19 and TypeScript.** Every page is a client component that polls `GET /api/t/{code}` every 2 seconds.
-- **`lib/engine/`** holds the match engine, which runs on [planck.js](https://piqnt.com/planck.js/) (a Box2D port). Each team has two men: the one nearest his own goal is the keeper (darker kit, gloves, number 1), who jumps higher. How far the men sway and how high the keeper jumps are set in `TUNE` at the top of `createGame`.
+- **`lib/engine/`** holds the match engine, which runs on [planck.js](https://piqnt.com/planck.js/) (a Box2D port), 60 ticks a second.
+  - **`sim.js`** is the match itself: the pitch, the men, the ball, the rules, the crazy rounds. It never touches a browser, so the match server runs exactly the same code. Each team has two men: the one nearest his own goal is the keeper (darker kit, gloves, number 1), who jumps higher. How far the men sway and how high the keeper jumps are set in `TUNE`.
   - **Dead balls:** a ball lying still is dropped again from the sky after 7 seconds (`TUNE.deadT`). The wait runs at half speed while a man is right next to the ball (`nearRate`), so someone on his way can still save it. A ball stuck on a goal roof waits 2.5 seconds (`roofT`). In the last couple of seconds a gold ring winds down around the ball.
   - **Own goals:** the banner says *Own goal* only when the scoring side hasn't touched the ball in the last 1.5 seconds (`OWN_T`), so a shot that brushes the keeper on its way in still counts as the shooter's goal.
-  - The engine has these modes:
-    - `practice` and `local2p`: simulated on this device.
-    - `demo`: CPU against CPU.
-    - `host`: simulates and streams snapshots.
-    - `guest`: runs its own copy of the match a little ahead of the host (prediction, below).
-    - `spectator`: draws the host's snapshots. Spectators are the organiser's big screen: watching needs the admin key, and each pitch in the grid can draw less often, at lower resolution, or not at all while another match fills the screen.
-- **`lib/net/link.js`** is the peer-to-peer link (WebRTC data channels).
-  - The left-hand player (the host) runs the physics. It streams binary snapshots 60 times a second on an unordered, no-retry channel, and events and button presses on a reliable one.
-  - Signaling goes through small mailboxes in Redis (`/api/t/{code}/m/{id}/signal`). Each side gathers its network candidates in full first, so a connection needs exactly one offer and one answer.
-- **Lag:** between New Jersey and Buenos Aires a message takes about 150 ms there and back, and no buffer can make that shorter. So the game predicts:
-  - **The host** draws its match as it happens, so its own presses show at once.
-  - **The guest** runs its own copy of the match a little ahead of the host: far enough that a press made now reaches the host before the host gets to that tick. Its own men react at once. Each press is stamped with that tick, and the host applies it on exactly that tick, so both matches agree.
-  - 20 times a second the host also sends the guest its **full state**: every body with its speed, each man's timers, and what the physics solver carries from one step to the next. When the copy had the same at that tick, which is most of the time, nothing happens. When the host did something the copy couldn't know (a press, usually), the copy goes back to the host's state and runs the ticks since again. Anything that moved because of that slides into place over about a tenth of a second.
-  - **The host's own presses** go to the guest the moment they happen (each full state also lists the last ones, in case one is held up). By the time a press arrives, the guest's copy is already past that tick, so it goes back to a full state from before the press and runs the ticks since again with it. The host's man is then drawn from his jump's start and plays 1.4 times as fast until he has caught up, instead of leaping to where he is by now (`CATCH_UP`). Near the guest's men, or a ball nobody is playing out, he slides into place instead, so whatever the guest can touch is always drawn where it really is.
-  - Measured with 75 ms each way plus 15 ms of jitter (`test/lag.mjs`): a press shows on the presser's own screen within a frame (it was about 300 ms before, for both players). The other player's presses show 100–140 ms after they press (220–390 ms before).
-  - **Equal delay** (a rule on the admin page, for when prediction misbehaves) switches this off: the guest draws the host's snapshots with just enough buffer for its connection, and the host waits as long, so both react equally late. A jump still uses the lean the player saw when pressing.
-- **`lib/tournament.ts`** is the knockout bracket, written as pure functions over one JSON document. It covers seeding, byes, advancing and organiser corrections.
-- **`lib/store.ts`** connects to Upstash Redis. Updates are compare-and-swap through a small Lua script, so simultaneous results never overwrite each other. It falls back to memory for local development.
+  - **`predict.js`** is a player's copy of the match, running a little ahead of the real one (*Lag*, below).
+  - **`game.js`** draws a match and takes the presses. Its modes: `practice` and `local2p` (simulated on this device), `demo` (CPU against CPU), `player` (a player on the match server), `spectator` (draws the server's snapshots: the organiser's big screen), and, peer to peer, `host` and `guest`.
+- **`server/`** is the match server: plain Node.js with [ws](https://github.com/websockets/ws), separate from the site so a deploy of the site or a slow page never stalls a match.
+  - Each match is a room. It runs the match 60 times a second and sends the two players its full state 20 times a second, and the big screen small snapshots 30 times a second.
+  - A page gets in with a **ticket**: the site signs it (HMAC with `MATCH_SECRET`) for one player of one match, or for the organiser, and it lasts 10 minutes. The match server never reads the database.
+  - Kick-offs, goals and results go back to the site's report route, signed with the same secret, retried in order until they're saved. If the match server restarts, the next ticket tells it the saved score, and the match carries on from there.
+  - Pages ping once a second. A player silent for 3 seconds (a network that dropped out, which often leaves the connection looking open) is taken as gone, so the match pauses; their page gives up after 3.5 seconds without an answer and comes back by itself.
+  - **One match at a time:** the bracket order decides who's on now (the organiser can call another match next), and only the match on now can be played.
+- **Lag:** between New Jersey and Buenos Aires a message takes about 150 ms there and back, and no buffer can make that shorter. So each player's page predicts:
+  - It runs its own **copy of the match a little ahead** of the server: far enough that a press made now reaches the server before the server gets to that tick. Its own men react at once (after the input delay, below). Each press is stamped with that tick, and the server applies it on exactly that tick, so both matches agree.
+  - The server sends each player its **full state** 20 times a second: every body with its speed, each man's timers, and what the physics solver carries from one step to the next. When the copy had the same at that tick, which is most of the time, nothing happens. When the server did something the copy couldn't know (the other player's press, usually), the copy goes back to the server's state and runs the ticks since again. Anything that moved because of that slides into place over about a tenth of a second.
+  - **The other player's presses** come from the server the moment it gets them. By the time one arrives the copy is past that tick, so it goes back and runs the ticks since again with it. That man is then drawn from his jump's start and plays 1.4 times as fast until he has caught up, instead of leaping to where he is by now (`CATCH_UP`). Near your own men, or a ball nobody is playing out, he slides into place instead, so whatever you can touch is always drawn where it really is.
+  - **Input delay** (a rule on the admin page for matches on the match server, 2 ticks by default, about 33 ms): every press waits that many ticks, and the copy runs that much less ahead, so there is less to correct. A press also carries the lean the player saw, and the server uses it when it's close to its own, so a jump goes where the player aimed it.
+  - Measured with the left-hand player 5 ms from the server and the right-hand one 75 ms plus up to 15 ms of jitter (`NEAR=5 node test/lag.mjs 75 15`): your own presses show 43–44 ms after you press (33 ms of that is the input delay), the other player's 120–133 ms, and every jump went in with the lean the player saw.
+  - The **line under the pitch** shows the round trip to the server, how much it wobbles, late pictures, catch-ups a minute and this device's frame time.
+  - **Peer to peer** (the organiser's switch) works as before the match server: the left-hand player's browser runs the match, streams it over WebRTC (`lib/net/link.js`, signaling through small mailboxes in Redis) and the right-hand player predicts. *Equal delay* switches prediction off there: both players see the match equally late. A free Cloudflare TURN relay (`CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`) helps players whose network blocks direct connections; `/api/ice` says `"relay":true` when it's on.
+- **`lib/tournament.ts`** is the knockout bracket, written as pure functions over one JSON document. It covers seeding, byes, the playing order, advancing and organiser corrections.
+- **`lib/store.ts`** keeps the cups in Redis (`REDIS_URL`), or Upstash over HTTP, or memory. Updates are compare-and-swap through a small Lua script, so simultaneous results never overwrite each other.
 - **API routes:**
   - Create a cup: `POST /api/t`
   - Read the state: `GET /api/t/{code}`
   - Join: `POST /api/t/{code}/join`
   - Organiser actions: `POST /api/t/{code}/admin`
-  - The host's kick-off, goal and result reports: `POST /api/t/{code}/m/{id}/report`
-  - Signaling: `/api/t/{code}/m/{id}/signal`
-  - Relay credentials: `GET /api/ice`
+  - A ticket for the match server: `POST /api/t/{code}/m/{id}/ticket`
+  - Kick-off, goal and result reports (the match server, or peer to peer the left-hand player): `POST /api/t/{code}/m/{id}/report`
+  - Peer to peer only: signaling, `/api/t/{code}/m/{id}/signal`, and relay credentials, `GET /api/ice`
 
 Players are identified by a random token kept in their browser. The server stores only its hash, and the same goes for the admin key.
 

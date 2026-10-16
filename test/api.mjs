@@ -1,14 +1,19 @@
 // Every API route against a running server: good input, bad input, who may do
-// what, and many requests at once. Works with either store (memory or Redis).
+// what, and many requests at once. Works with either store (memory or Redis), with or
+// without a match server.
 //
 //   npm run build && npm start
-//   node test/api.mjs                  (BASE=http://localhost:3000)
+//   node test/api.mjs                  (BASE=http://localhost:3000; MATCH_SECRET=<the site's> also
+//                                       checks the tickets' signatures and the match server's reports)
 //
 // Exits non-zero on the first failed check of each group and lists them all at the end.
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 
 const BASE = process.env.BASE || 'http://localhost:3000';
+const SECRET = process.env.MATCH_SECRET || '';
 const results = [];
+const DEFAULTS = { goals: 3, capSec: 90, finalGoals: 5, finalCapSec: 150, modifiers: true, equalDelay: false, net: 'server', inputDelay: 2 };
 
 async function req(path, body, headers) {
   const r = await fetch(BASE + path, body !== undefined
@@ -52,7 +57,7 @@ await group('create a cup: name cleaned, code and key returned', async () => {
   const v = await view(a.code);
   assert.equal(v.name, 'bOffice/b Cup');
   assert.equal(v.status, 'lobby');
-  assert.deepEqual(v.rules, { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true, equalDelay: false });
+  assert.deepEqual(v.rules, DEFAULTS);
   const b = await ok('/api/t', { name: 'x'.repeat(60) });
   assert.equal((await view(b.code)).name.length, 18);
   const c = await ok('/api/t', {});
@@ -70,6 +75,9 @@ await group('reading a cup: lowercase codes work, unknown codes are 404, no secr
   assert.equal(r.headers.get('cache-control'), 'no-store');
   assert.ok(typeof r.j.now === 'number' && Math.abs(r.j.now - Date.now()) < 60000);
   assert.equal(r.j.you, null);
+  assert.equal(typeof r.j.matchServer, 'boolean');
+  assert.equal(r.j.current, null);
+  assert.deepEqual(r.j.queue, []);
   await err(404, '/api/t/ZZZZZ');
   await err(404, '/api/t/' + c.code + 'X');
 });
@@ -129,14 +137,26 @@ await group('organiser: rules are clamped, rename, remove players', async () => 
   const c = await cup(3);
   assert.equal((await c.admin('rules', { rules: { goals: 0, capSec: 5000, finalGoals: 99, finalCapSec: -4, modifiers: false } })).status, 200);
   let v = await view(c.code);
-  assert.deepEqual(v.rules, { goals: 1, capSec: 900, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: false });
+  const base = { goals: 1, capSec: 900, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: false, net: 'server', inputDelay: 2 };
+  assert.deepEqual(v.rules, base);
   await c.admin('rules', { rules: { goals: 'abc', capSec: 120 } });
   v = await view(c.code);
-  assert.deepEqual(v.rules, { goals: 1, capSec: 120, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: false });
-  await c.admin('rules', { rules: { equalDelay: true } });            // online without prediction
+  assert.deepEqual(v.rules, { ...base, capSec: 120 });
+  await c.admin('rules', { rules: { equalDelay: true } });            // peer to peer without prediction
   v = await view(c.code);
-  assert.deepEqual(v.rules, { goals: 1, capSec: 120, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: true });
+  assert.deepEqual(v.rules, { ...base, capSec: 120, equalDelay: true });
   await c.admin('rules', { rules: { equalDelay: false } });
+  // the organiser's switch, and the input delay (0 to 4 ticks)
+  await c.admin('rules', { rules: { net: 'p2p', inputDelay: 9 } });
+  v = await view(c.code);
+  assert.deepEqual([v.rules.net, v.rules.inputDelay], ['p2p', 4]);
+  await c.admin('rules', { rules: { net: 'carrier pigeon', inputDelay: -3 } });
+  v = await view(c.code);
+  assert.deepEqual([v.rules.net, v.rules.inputDelay], ['p2p', 0]);
+  await c.admin('rules', { rules: { net: 'server', inputDelay: 'soon' } });
+  v = await view(c.code);
+  assert.deepEqual([v.rules.net, v.rules.inputDelay], ['server', 0]);
+  await c.admin('rules', { rules: { inputDelay: 2 } });
   await c.admin('rename', { name: 'Friday Cup' });
   await c.admin('rename', { name: '   ' });
   assert.equal((await view(c.code)).name, 'Friday Cup');
@@ -182,7 +202,14 @@ await group('the draw: needs two players, byes go through, entries close', async
   assert.deepEqual(ids, v.players.map(p => p.id).sort());
   assert.ok(v.matches.every(m => m.label && m.rules && typeof m.rules.goals === 'number'));
   assert.ok(v.matches.every(m => m.rules.equalDelay === false));           // prediction on unless the organiser says
+  assert.ok(v.matches.every(m => m.rules.net === (v.matchServer ? 'server' : 'p2p') && m.rules.inputDelay === 2));
   assert.equal(v.matches.find(m => m.round === 3).rules.goals, 5);          // the final's own rules
+  // one match at a time: the only real first-round match is on, the rest follow in order
+  const real = r1.find(m => m.status === 'ready');
+  assert.equal(v.current, real.id);
+  assert.equal(v.queue[0], real.id);
+  assert.equal(v.queue.length, 1 + v.matches.filter(m => m.round > 1).length);
+  assert.equal(v.next, v.queue[1]);
   assert.match(await err(409, '/api/t/' + c.code + '/join', { name: 'Late' }), /already started/);
   const p1 = await ok('/api/t/' + c.code + '/join', { name: 'Renamed', token: c.players[0].token });
   assert.equal(p1.playerId, c.players[0].playerId);
@@ -190,8 +217,9 @@ await group('the draw: needs two players, byes go through, entries close', async
   assert.equal((await c.admin('remove', { playerId: c.players[1].playerId })).status, 409);
 });
 
-await group('match reports: only the host, start, goals, a final needs a winner', async () => {
+await group('match reports, peer to peer: only the host, start, goals, a final needs a winner', async () => {
   const c = await cup(2);
+  await c.admin('rules', { rules: { net: 'p2p' } });
   await c.admin('start');
   const m = (await view(c.code)).matches[0];
   const base = '/api/t/' + c.code + '/m/' + m.id + '/report';
@@ -224,6 +252,7 @@ await group('match reports: only the host, start, goals, a final needs a winner'
 
 await group('the host moves a live match onto their own device', async () => {
   const c = await cup(2);
+  await c.admin('rules', { rules: { net: 'p2p' } });
   await c.admin('start');
   const m = (await view(c.code)).matches[0];
   const base = '/api/t/' + c.code + '/m/' + m.id + '/report';
@@ -236,6 +265,7 @@ await group('the host moves a live match onto their own device', async () => {
 
 await group('organiser: walkovers, corrections until the next match starts, resets', async () => {
   const c = await cup(4);
+  await c.admin('rules', { rules: { net: 'p2p' } });
   await c.admin('start');
   let v = await view(c.code);
   const [s1, s2] = v.matches.filter(m => m.round === 1);
@@ -350,7 +380,7 @@ await group('relay servers: without a TURN key the app hands out STUN only', asy
 
 await group('a whole 6-player cup through the API, with reports racing each other', async () => {
   const c = await cup(6);
-  await c.admin('rules', { rules: { goals: 2, capSec: 60, finalGoals: 3, finalCapSec: 90 } });
+  await c.admin('rules', { rules: { goals: 2, capSec: 60, finalGoals: 3, finalCapSec: 90, net: 'p2p' } });
   await c.admin('start');
   for (let round = 1; round <= 3; round++) {
     const v = await view(c.code);
@@ -374,6 +404,7 @@ await group('a whole 6-player cup through the API, with reports racing each othe
 
 await group('results from all eight round-one matches at the same moment are all kept', async () => {
   const c = await cup(16);
+  await c.admin('rules', { rules: { net: 'p2p' } });
   await c.admin('start');
   const v = await view(c.code);
   const r1 = v.matches.filter(m => m.round === 1);
@@ -382,6 +413,150 @@ await group('results from all eight round-one matches at the same moment are all
   const after = await view(c.code);
   assert.equal(after.matches.filter(m => m.round === 1 && m.status === 'done').length, 8);
   assert.equal(after.matches.filter(m => m.round === 2 && m.status === 'ready').length, 4);
+});
+
+await group('one match at a time: the playing order, the organiser\'s pick, one live match', async () => {
+  const c = await cup(8);
+  await c.admin('rules', { rules: { net: 'p2p' } });
+  await c.admin('start');
+  let v = await view(c.code);
+  const ids = v.matches.slice().sort((a, b) => a.round - b.round || a.index - b.index).map(m => m.id);
+  assert.deepEqual(ids.slice(0, 4), ['r1m1', 'r1m2', 'r1m3', 'r1m4']);
+  assert.deepEqual([v.current, v.next, v.upNext], ['r1m1', 'r1m2', null]);
+  assert.deepEqual(v.queue, ids);
+  // someone in r1m1 is late: the organiser calls r1m3 instead
+  assert.equal((await c.admin('next', { matchId: 'r2m1' })).status, 409);      // no players yet
+  assert.equal((await c.admin('next', { matchId: 'r9m9' })).status, 409);
+  assert.equal((await c.admin('next', { matchId: 'r1m3' })).status, 200);
+  v = await view(c.code);
+  assert.deepEqual([v.current, v.next, v.upNext], ['r1m3', 'r1m1', 'r1m3']);
+  assert.equal(v.queue[0], 'r1m3');
+  // r1m3 kicks off: the pick is used up; another match can't go live alongside it
+  const m3 = v.matches.find(m => m.id === 'r1m3');
+  await ok('/api/t/' + c.code + '/m/r1m3/report', { token: tokenOf(c, m3.a), kind: 'start' });
+  v = await view(c.code);
+  assert.deepEqual([v.current, v.next, v.upNext], ['r1m3', 'r1m1', null]);
+  assert.match(await err(409, '/api/t/' + c.code + '/admin', { key: c.adminKey, action: 'live', matchId: 'r1m1' }), /One match at a time/);
+  // it ends: back to the order
+  await ok('/api/t/' + c.code + '/m/r1m3/report', { token: tokenOf(c, m3.a), kind: 'final', score: [3, 0], winner: 'a' });
+  v = await view(c.code);
+  assert.deepEqual([v.current, v.next], ['r1m1', 'r1m2']);
+  assert.ok(!v.queue.includes('r1m3'));
+  // a pick can be taken back
+  await c.admin('next', { matchId: 'r1m4' });
+  assert.equal((await view(c.code)).current, 'r1m4');
+  await c.admin('next', { matchId: null });
+  v = await view(c.code);
+  assert.deepEqual([v.current, v.upNext], ['r1m1', null]);
+  // the organiser deciding the match on now moves the cup on, like a played one
+  await c.admin('result', { matchId: 'r1m1', winner: 'b', score: [0, 0], via: 'walkover' });
+  assert.equal((await view(c.code)).current, 'r1m2');
+});
+
+await group('tickets for the match server: your match when it\'s on, the organiser any match', async () => {
+  const c = await cup(4);
+  const v0 = await view(c.code);
+  const tk = (id, body) => req('/api/t/' + c.code + '/m/' + id + '/ticket', body);
+  if (!v0.matchServer) {
+    await c.admin('start');
+    assert.equal((await tk('r1m1', { token: c.players[0].token })).status, 503);
+    return;
+  }
+  await c.admin('start');
+  const v = await view(c.code);
+  const [m1, m2] = v.matches.filter(m => m.round === 1);
+  const decode = s => JSON.parse(Buffer.from(s.split('.')[0], 'base64url').toString('utf8'));
+  // the players of the match on now
+  const a = await tk(m1.id, { token: tokenOf(c, m1.a) });
+  assert.equal(a.status, 200, a.text);
+  assert.equal(typeof a.j.url, 'string');
+  const ta = decode(a.j.ticket);
+  assert.equal(ta.s, 0);
+  assert.deepEqual([ta.c, ta.m, ta.st, ta.g, ta.a.id, ta.b.id, ta.lb], [c.code, m1.id, 'ready', 0, m1.a, m1.b, 'Semi-finals']);
+  assert.deepEqual(ta.r, { goals: 3, capSec: 90, modifiers: true, inputDelay: 2 });
+  assert.ok(ta.x > Date.now() + 9 * 60000 && ta.x < Date.now() + 11 * 60000, 'lasts about 10 minutes');
+  assert.ok(!JSON.stringify(ta).includes(tokenOf(c, m1.a)), 'a token in the ticket');
+  if (SECRET) {
+    const [body, sig] = a.j.ticket.split('.');
+    assert.equal(sig, createHmac('sha256', SECRET).update(body).digest('base64url'), 'signed with MATCH_SECRET');
+  }
+  assert.equal(decode((await tk(m1.id, { token: tokenOf(c, m1.b) })).j.ticket).s, 1);
+  // the organiser watches any match, on or not
+  const o1 = await tk(m2.id, { key: c.adminKey });
+  assert.equal(o1.status, 200);
+  assert.equal(decode(o1.j.ticket).s, -1);
+  // turned away: other people, wrong keys, the next match's players, odd matches
+  assert.match(await err(403, '/api/t/' + c.code + '/m/' + m1.id + '/ticket', { token: tokenOf(c, m2.a) }), /Not your match/);
+  await err(403, '/api/t/' + c.code + '/m/' + m1.id + '/ticket', { key: 'wrong' });
+  await err(403, '/api/t/' + c.code + '/m/' + m1.id + '/ticket', {});
+  assert.match(await err(409, '/api/t/' + c.code + '/m/' + m2.id + '/ticket', { token: tokenOf(c, m2.a) }), /Not your turn/);
+  await err(409, '/api/t/' + c.code + '/m/r2m1/ticket', { key: c.adminKey });
+  await err(404, '/api/t/' + c.code + '/m/r7m7/ticket', { key: c.adminKey });
+  await err(404, '/api/t/QQQQQ/m/r1m1/ticket', { key: c.adminKey });
+  // a match on one device, a peer-to-peer match, a finished match
+  await c.admin('live', { matchId: m1.id });
+  assert.match(await err(409, '/api/t/' + c.code + '/m/' + m1.id + '/ticket', { token: tokenOf(c, m1.a) }), /one device/);
+  await c.admin('result', { matchId: m1.id, winner: 'a', score: [3, 1], via: 'local' });
+  assert.match(await err(410, '/api/t/' + c.code + '/m/' + m1.id + '/ticket', { token: tokenOf(c, m1.a) }), /over/);
+  await c.admin('rules', { rules: { net: 'p2p' } });
+  assert.match(await err(409, '/api/t/' + c.code + '/m/' + m2.id + '/ticket', { token: tokenOf(c, m2.a) }), /peer to peer/);
+  // the score and status carry over, so a restarted match server carries on
+  await c.admin('rules', { rules: { net: 'server' } });
+  await req('/api/t/' + c.code + '/m/' + m2.id + '/report', { kind: 'start' }, { 'x-cc-server': SECRET || 'x' });
+  if (SECRET) {
+    await req('/api/t/' + c.code + '/m/' + m2.id + '/report', { kind: 'score', score: [1, 2] }, { 'x-cc-server': SECRET });
+    const t2 = decode((await tk(m2.id, { token: tokenOf(c, m2.b) })).j.ticket);
+    assert.deepEqual([t2.st, t2.sc], ['live', [1, 2]]);
+  }
+});
+
+await group('reports from the match server: the shared secret, start, goals, result, a reset match', async () => {
+  const c = await cup(2);
+  const v0 = await view(c.code);
+  await c.admin('start');
+  const m = (await view(c.code)).matches[0];
+  const base = '/api/t/' + c.code + '/m/' + m.id + '/report';
+  const host = tokenOf(c, m.a);
+  if (!v0.matchServer) {
+    await err(403, base, { kind: 'start' }, { 'x-cc-server': 'anything' });
+    return;
+  }
+  // on the match server, the host's page doesn't report (unless the match moved onto its device)
+  assert.match(await err(403, base, { token: host, kind: 'start' }), /match server reports/);
+  await err(403, base, { kind: 'start' }, { 'x-cc-server': 'not-the-secret' });
+  if (!SECRET) return;
+  const srv = { 'x-cc-server': SECRET };
+  await ok(base, { kind: 'start', gen: 0 }, srv);
+  let x = (await view(c.code)).matches[0];
+  assert.deepEqual([x.status, x.net], ['live', 'server']);
+  await ok(base, { kind: 'score', score: [1, 0], gen: 0 }, srv);
+  assert.deepEqual((await view(c.code)).matches[0].score, [1, 0]);
+  // the organiser resets the match: reports about the old one don't count
+  await c.admin('reset', { matchId: m.id });
+  x = (await view(c.code)).matches[0];
+  assert.deepEqual([x.status, x.gen, x.net], ['ready', 1, undefined]);
+  assert.match(await err(409, base, { kind: 'score', score: [2, 0], gen: 0 }, srv), /reset/);
+  await ok(base, { kind: 'start', gen: 1 }, srv);
+  await ok(base, { kind: 'final', score: [1, 3], winner: 'b', gen: 1 }, srv);
+  await ok(base, { kind: 'final', score: [1, 3], winner: 'b', gen: 1 }, srv);      // a retry changes nothing
+  const v = await view(c.code);
+  assert.deepEqual([v.status, v.champion, v.matches[0].via], ['finished', m.b, 'played']);
+});
+
+await group('the host moves a match on the match server onto their own device', async () => {
+  const c = await cup(2);
+  const v0 = await view(c.code);
+  if (!v0.matchServer) return;
+  await c.admin('start');
+  const m = (await view(c.code)).matches[0];
+  const base = '/api/t/' + c.code + '/m/' + m.id + '/report';
+  const host = tokenOf(c, m.a);
+  await ok(base, { token: host, kind: 'start', local: true });
+  const x = (await view(c.code)).matches[0];
+  assert.deepEqual([x.status, x.local], ['live', 'host']);
+  await ok(base, { token: host, kind: 'score', score: [0, 1] });
+  await ok(base, { token: host, kind: 'final', score: [0, 2], winner: 'b' });
+  assert.equal((await view(c.code)).champion, m.b);
 });
 
 console.log('\n' + results.map(r => r.join('  ')).join('\n'));

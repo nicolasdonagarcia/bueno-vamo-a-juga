@@ -2,7 +2,7 @@
 // A tournament match with both players on one device (the big screen, or the
 // host's laptop when the online link will not connect). Results go through `reporter`.
 import { useEffect, useRef, useState } from 'react';
-import { Snd } from '@/lib/engine/shared';
+import { Snd } from '@/lib/engine/sound';
 import { BOTS_ALLOWED, rulesLine } from '@/lib/client';
 import type { PublicMatch, PublicPlayer } from '@/lib/tournament';
 import type { GameApi } from '@/lib/engine/types';

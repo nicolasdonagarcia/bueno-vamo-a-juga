@@ -2,30 +2,37 @@
   "name": "coterie-cup",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "description": "The Coterie Cup: a 1v1 knockout tournament of one-button ragdoll football",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
     "build": "next build",
-    "start": "next start",
-    "test": "node --test test/unit/*.test.mjs",
+    "start": "node scripts/start.mjs",
+    "start:app": "next start",
+    "start:server": "node --disable-warning=ExperimentalWarning server/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/unit/*.test.mjs",
+    "test:server": "node --disable-warning=ExperimentalWarning test/server.mjs",
     "e2e": "node test/e2e.mjs"
   },
   "dependencies": {
+    "@redis/client": "6.3.0",
     "@upstash/redis": "1.39.0",
     "next": "16.3.8",
     "planck": "1.5.0",
     "qrcode": "1.5.4",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
     "@types/qrcode": "1.5.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.2.3",
+    "@types/ws": "8.18.2",
     "typescript": "5.9.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   }
 }

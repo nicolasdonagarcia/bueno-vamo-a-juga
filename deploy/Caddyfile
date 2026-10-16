@@ -1,0 +1,14 @@
+# Caddy in front of both services. setup.sh copies this to /etc/caddy/Caddyfile and sets
+# CUP_DOMAIN in /etc/default/caddy (cup.example.com: Caddy gets the HTTPS certificate
+# from Let's Encrypt by itself; ":80" with no domain: plain HTTP on the droplet's address).
+{$CUP_DOMAIN::80} {
+	# the match server: one WebSocket per player and one for the big screen
+	handle /ws* {
+		reverse_proxy 127.0.0.1:3001
+	}
+	# the pages and the bracket
+	handle {
+		encode zstd gzip
+		reverse_proxy 127.0.0.1:3000
+	}
+}

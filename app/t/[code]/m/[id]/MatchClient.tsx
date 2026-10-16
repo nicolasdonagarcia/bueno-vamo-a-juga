@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import LocalStage, { type Reporter } from '@/components/LocalStage';
 import MatchStage from '@/components/MatchStage';
 import { Brand, Loading, PlayerChip } from '@/components/bits';
-import { ApiError, BOTS_ALLOWED, api, matchOf, playerOf, rulesLine, sleep, useIdentity, useTournament } from '@/lib/client';
+import { ApiError, BOTS_ALLOWED, api, isCurrent, matchOf, playerOf, rulesLine, sleep, useIdentity, useTournament } from '@/lib/client';
 import { roundName } from '@/lib/tournament';
 
 type Role = 'host' | 'guest' | 'spectator' | 'host-local' | 'admin-local';
@@ -50,6 +50,8 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
 
   useEffect(() => { setTouch(matchMedia('(hover: none) and (pointer: coarse)').matches); }, []);
 
+  // one match at a time: a player's match opens when it is the one on now
+  const turn = !!t && !!m && (m.status === 'live' || isCurrent(t, m));
   // decide once what this device is in the match
   useEffect(() => {
     if (role || !t || !m || t.forToken !== token) return;
@@ -57,9 +59,10 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     if (local) { if (idn.admin) { setResume(m.status === 'live' ? m.score : null); setRole('admin-local'); } return; }
     const r: Role = t.you && t.you === m.a ? (m.local ? 'host-local' : 'host') : t.you && t.you === m.b ? 'guest' : 'spectator';
     if (r === 'spectator' && !idn.admin) { setNotMine(true); return; }
+    if (r !== 'spectator' && !turn) return;
     if (r === 'host' || r === 'host-local') setResume(m.status === 'live' ? m.score : null);
     setRole(r);
-  }, [role, t, m, token, local, idn.admin]);
+  }, [role, t, m, token, local, idn.admin, turn]);
 
   const reporter = useMemo(() => {
     if (role === 'admin-local' && idn.admin) return adminReporter(code, id, idn.admin);
@@ -81,6 +84,12 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     else if (notMine && m.status !== 'done') {
       body = <Notice title="Not your match" text="Only the two players can open a match. Every match is on the organiser’s screen in the meeting." href={hubHref}>
         <p className="vs-line"><PlayerChip p={pa} /> <span className="vs-x">vs</span> <PlayerChip p={pb} /></p>
+      </Notice>;
+    } else if ((m.status === 'ready' || m.status === 'live') && !turn && (t.you === m.a || t.you === m.b)) {
+      const now = matchOf(t, t.current || '');
+      const before = t.queue.indexOf(m.id);
+      body = <Notice title={before === 1 ? 'You’re up next' : 'Not your turn yet'} text={'One match at a time. ' + (before > 1 ? before + ' matches before yours. ' : '') + 'Keep this page open: your match starts here when it’s your turn.'} href={hubHref}>
+        {now ? <p className="vs-line">Now playing: <PlayerChip p={playerOf(t, now.a)} /> <span className="vs-x">vs</span> <PlayerChip p={playerOf(t, now.b)} />{now.status === 'live' ? <span className="pill live">{now.score[0]}–{now.score[1]}</span> : null}</p> : null}
       </Notice>;
     } else if (m.status === 'waiting') {
       body = <Notice title="Not ready yet" text="This match starts once both matches before it are finished." href={hubHref}>
@@ -106,8 +115,8 @@ export default function MatchClient({ code, id, local, bot, from }: { code: stri
     body = reporter ? <LocalStage key={role} m={m} pa={pa} pb={pb} reporter={reporter} resumeScore={resume} nextLabel={nextLabel} onExit={back} full /> : <Loading />;
   } else {
     body = (
-      <MatchStage key={role} role={role} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
-        resumeScore={resume} nextLabel={nextLabel} serverResult={serverResult} full
+      <MatchStage key={role} role={role} transport={m.rules.net === 'server' ? 'server' : 'p2p'} code={code} m={m} pa={pa} pb={pb} token={token} adminKey={role === 'spectator' ? idn.admin : null} bot={botSkill || undefined}
+        resumeScore={resume} nextLabel={nextLabel} serverResult={serverResult} full netLine
         onExit={back} onEnded={botSkill ? back : undefined}
         onLocal={role === 'host' ? () => { setResume(m.status === 'live' ? m.score : null); setRole('host-local'); } : undefined} />
     );

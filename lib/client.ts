@@ -136,17 +136,27 @@ export function feederOf(t: PublicTournament, m: PublicMatch, me: string): Publi
 
 export type MyStatus =
   | { kind: 'none' }
-  | { kind: 'play'; m: PublicMatch }
+  | { kind: 'play'; m: PublicMatch }                                   // on now (or called): go and play
+  | { kind: 'queued'; m: PublicMatch; before: number; now: PublicMatch | null }   // ready, but other matches come first
   | { kind: 'waiting'; m: PublicMatch; feeder: PublicMatch | null }
   | { kind: 'out'; m: PublicMatch }
   | { kind: 'champion'; m: PublicMatch };
+
+// one match at a time: is this the match on now (or called next)?
+export function isCurrent(t: Pick<PublicTournament, 'current'> | null, m: Pick<PublicMatch, 'id'> | null) {
+  return !!t && !!m && t.current === m.id;
+}
 
 export function myStatus(t: PublicTournament, me: string | null): MyStatus {
   if (!me || t.status === 'lobby') return { kind: 'none' };
   const mine = t.matches.filter(m => m.a === me || m.b === me).sort((a, b) => b.round - a.round);
   const m = mine[0];
   if (!m) return { kind: 'none' };
-  if (m.status === 'ready' || m.status === 'live') return { kind: 'play', m };
+  if (m.status === 'ready' || m.status === 'live') {
+    if (t.current === m.id || m.status === 'live') return { kind: 'play', m };
+    const before = t.queue.indexOf(m.id);
+    return { kind: 'queued', m, before: before < 0 ? t.queue.length : before, now: t.matches.find(x => x.id === t.current) || null };
+  }
   if (m.status === 'done') {
     if (m.winner === me) return m.round === t.rounds ? { kind: 'champion', m } : { kind: 'waiting', m, feeder: null };
     return { kind: 'out', m };
@@ -173,6 +183,14 @@ export function rulesLine(r: { goals: number; capSec: number }) {
   return 'First to ' + r.goals + (r.capSec ? ' · ' + fmtTime(r.capSec) + ' cap, then golden goal' : '');
 }
 export function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
+// the match server's address as this page reaches it: a full ws(s):// address, a path on this
+// site (/ws), or a port on this site's host name (:3001/ws)
+export function wsUrl(u: string) {
+  if (/^wss?:\/\//.test(u)) return u;
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (u.startsWith(':')) return proto + '//' + window.location.hostname + u;
+  return proto + '//' + window.location.host + (u.startsWith('/') ? u : '/' + u);
+}
 export function absUrl(path: string) {
   return typeof window === 'undefined' ? path : window.location.origin + path;
 }

@@ -59,7 +59,7 @@ export default function Admin({ code }: { code: string }) {
               <div className="row"><CopyButton text={playerUrl} label="Copy player link" /></div>
               <p className="field-label">Big screen for the meeting</p>
               <div className="row"><a className="btn small" href={'/t/' + code + '/screen'} target="_blank" rel="noreferrer">Open the big screen</a></div>
-              <p className="note small">Share it in your video call: the QR code while people join, then every match live in a grid. Click a match to fill the screen. Only you can open it.</p>
+              <p className="note small">Share it in your video call: the QR code while people join, then the live match (one at a time), who&apos;s up next and the bracket. Only you can open it.</p>
               <p className="field-label">This admin page</p>
               <div className="row"><CopyButton text={adminUrl} label="Copy admin link" /></div>
               <p className="note small">Keep the admin link to yourself: it starts the draw and changes results.</p>
@@ -119,11 +119,14 @@ function useAction(act: Act) {
   return { busy, error, run, setError };
 }
 
+// one match at a time: every match one after another, with about half a minute between them
+// (the next pair's pages beep, they press Play and I'm ready)
 function estimate(n: number, r: Rules) {
-  if (n < 2 || !r.capSec || !r.finalCapSec) return '';
-  const rounds = Math.ceil(Math.log2(n));
-  const min = (rounds - 1) * (r.capSec / 60 + 1.5) + r.finalCapSec / 60 + 1.5;
-  return rounds + ' rounds · about ' + Math.round(min) + ' minutes if every match goes the distance (golden goals add a little)';
+  if (n < 2) return '';
+  const matches = n - 1;
+  if (!r.capSec || !r.finalCapSec) return matches + ' matches, one at a time. Set time limits to know how long the cup takes.';
+  const min = (matches - 1) * (r.capSec / 60 + 0.5) + r.finalCapSec / 60 + 0.5;
+  return matches + ' matches, one at a time · up to about ' + Math.round(min) + ' minutes if every match goes the distance (golden goals add a little)';
 }
 
 function LobbyAdmin({ t, act }: { t: View; act: Act }) {
@@ -164,6 +167,7 @@ function MatchesAdmin({ t, code, act }: { t: View; code: string; act: Act }) {
         <h2 className="h3">Matches</h2>
         {t.status === 'finished' ? <span className="pill gold">Champion: {playerOf(t, t.champion)?.name}</span> : null}
       </div>
+      {t.status === 'running' ? <p className="note small">One match at a time, in this order. When a match ends, the next pair is called. Someone late? Pick another match to go next.</p> : null}
       {rounds.map(r => {
         const ms = t.matches.filter(m => m.round === r);
         return (
@@ -181,6 +185,7 @@ function MatchesAdmin({ t, code, act }: { t: View; code: string; act: Act }) {
 
 function MatchRow({ t, m, code, act, open, onToggle }: { t: View; m: PublicMatch; code: string; act: Act; open: boolean; onToggle: () => void }) {
   const pa = playerOf(t, m.a), pb = playerOf(t, m.b);
+  const isNow = t.current === m.id, isNext = t.next === m.id;
   const a = useAction(act);
   const [sa, setSa] = useState(String(m.score[0]));
   const [sb, setSb] = useState(String(m.score[1]));
@@ -198,15 +203,21 @@ function MatchRow({ t, m, code, act, open, onToggle }: { t: View; m: PublicMatch
         <b className="score">{m.via === 'bye' ? '' : m.status === 'done' && m.via === 'walkover' ? 'W/O' : m.status === 'live' || m.status === 'done' ? m.score[0] + '–' + m.score[1] : 'vs'}</b>
         <PlayerChip p={pb} fallback={m.via === 'bye' ? 'Bye' : 'To be decided'} />
         {(m.status === 'ready' || m.status === 'live') && pb && !m.local ? <span className={'online' + (t.online[pb.id] ? ' on' : '')} /> : null}
-        <span className={'pill' + (m.status === 'live' ? ' live' : m.status === 'done' ? ' ok' : '')}>{statusText}</span>
+        <span className={'pill' + (m.status === 'live' ? ' live' : m.status === 'done' ? ' ok' : isNow ? ' gold' : '')}>{isNow && m.status === 'ready' ? 'On now' : isNext ? 'Next' : statusText}</span>
         {both && m.via !== 'bye' ? <button type="button" className="btn ghost small" aria-expanded={open} onClick={onToggle}>{open ? 'Close' : 'Manage'}</button> : null}
       </div>
       {open && pa && pb ? (
         <div className="match-tools">
-          {m.status === 'ready' || m.status === 'live' ? (
+          {(m.status === 'ready' || m.status === 'live') && (isNow || m.local === 'admin') ? (
             <div className="row">
               <Link className="btn small" href={'/t/' + code + '/m/' + m.id + '?local=1'}>Play it on this device</Link>
-              <span className="note small">For two people sharing one keyboard, or when their link won&apos;t connect.</span>
+              <span className="note small">For two people sharing one keyboard, or when their connection won&apos;t work.</span>
+            </div>
+          ) : null}
+          {m.status === 'ready' && !isNow ? (
+            <div className="row">
+              <button type="button" className="btn ghost small" disabled={!!a.busy || t.upNext === m.id} onClick={() => a.run('next', 'next', { matchId: m.id })}>{t.upNext === m.id ? 'Goes next' : 'Play this one next'}</button>
+              <span className="note small">Before the rest of the order (when someone in the match on now is late, say).</span>
             </div>
           ) : null}
           <div className="row score-entry">
@@ -249,6 +260,8 @@ function RulesCard({ t, act }: { t: View; act: Act }) {
   const a = useAction(act);
   const [savedMsg, setSavedMsg] = useState('');
   const dirty = JSON.stringify(r) !== JSON.stringify(t.rules) || name.trim() !== t.name;
+  const server = !!t.matchServer && r.net !== 'p2p';
+  const inputDelay = r.inputDelay ?? 2;
   useEffect(() => { if (!savedMsg) return; const x = setTimeout(() => setSavedMsg(''), 2000); return () => clearTimeout(x); }, [savedMsg]);
   const sel = (label: string, value: number, opts: number[], fmt: (n: number) => string, on: (n: number) => void) => (
     <label className="field">
@@ -269,7 +282,28 @@ function RulesCard({ t, act }: { t: View; act: Act }) {
         {sel('Final: time limit', r.finalCapSec, CAPS, n => n ? fmtTime(n) + ', then golden goal' : 'No limit', n => setR({ ...r, finalCapSec: n }))}
       </div>
       <label className="check"><input type="checkbox" checked={r.modifiers} onChange={e => setR({ ...r, modifiers: e.target.checked })} /> Crazy rounds: after each goal the pitch may change (moon gravity, ice, big heads, a baseball, an American football…)</label>
-      <label className="check"><input type="checkbox" checked={!!r.equalDelay} onChange={e => setR({ ...r, equalDelay: e.target.checked })} /> Equal delay instead of prediction: both players see their match a moment late (the time a message takes there and back) and nothing slides into place. Only if prediction misbehaves.</label>
+      <div className="field">
+        <span>Online matches run</span>
+        <div className="seg" role="radiogroup" aria-label="Online matches run">
+          <button type="button" role="radio" aria-checked={server} disabled={!t.matchServer} onClick={() => setR({ ...r, net: 'server' })}>On the match server</button>
+          <button type="button" role="radio" aria-checked={!server} onClick={() => setR({ ...r, net: 'p2p' })}>Peer to peer</button>
+        </div>
+        <p className="note small">{!t.matchServer ? 'This site has no match server set up, so matches run peer to peer: the left-hand player’s browser runs the match.'
+          : server ? 'The server runs every match; both players see their own presses at once.' : 'The left-hand player’s browser runs the match, as before the match server. Keep it as a fallback.'}</p>
+      </div>
+      {server ? (
+        <>
+          <label className="field">
+            <span>Input delay</span>
+            <select className="select" value={inputDelay} onChange={e => setR({ ...r, inputDelay: Number(e.target.value) })}>
+              {[0, 1, 2, 3, 4].map(n => <option key={n} value={n}>{n === 0 ? 'None' : n + (n === 1 ? ' tick' : ' ticks') + ' (' + Math.round(n * 1000 / 60) + ' ms)'}</option>)}
+            </select>
+          </label>
+          <p className="note small">Every press goes in this much later, on every screen. Each tick makes the other player&apos;s catch-ups 17 ms shorter and your own presses 17 ms later. Try 2.</p>
+        </>
+      ) : (
+        <label className="check"><input type="checkbox" checked={!!r.equalDelay} onChange={e => setR({ ...r, equalDelay: e.target.checked })} /> Equal delay instead of prediction: both players see their match a moment late (the time a message takes there and back) and nothing slides into place. Only if prediction misbehaves.</label>
+      )}
       <p className="note small">Changes apply to matches that haven&apos;t kicked off yet.</p>
       {a.error ? <p className="error">{a.error}</p> : null}
       <div className="row">

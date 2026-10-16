@@ -1,5 +1,6 @@
 // The knockout bracket: pure functions over a plain JSON document, so the same
-// code runs in API routes and in tests.
+// code runs in API routes and in tests. The cup plays one match at a time, in
+// bracket order (see currentMatch).
 
 export type Player = { id: string; name: string; flag: string; color: string; tokenHash: string; joinedAt: number };
 export type MatchStatus = 'waiting' | 'ready' | 'live' | 'done';
@@ -9,18 +10,25 @@ export type Match = {
   status: MatchStatus; score: [number, number]; winner: string | null;
   via?: 'played' | 'walkover' | 'admin' | 'bye' | 'local';
   local?: 'admin' | 'host';       // being played on one device instead of online: the organiser's, or the host's
+  net?: Net;                      // how it was played once it kicked off (the rule may change later)
+  gen?: number;                   // goes up when the organiser resets it: a match server room from before is dropped
   startedAt?: number; endedAt?: number; updatedAt?: number;
 };
-// equalDelay: no prediction online: both players see the match equally late (the round trip)
-export type Rules = { goals: number; capSec: number; finalGoals: number; finalCapSec: number; modifiers: boolean; equalDelay?: boolean };
+// how online matches run: on the match server (default), or peer to peer between the two browsers
+export type Net = 'server' | 'p2p';
+// equalDelay: peer to peer without prediction: both players see the match equally late (the round trip)
+// inputDelay: ticks (1/60 s) every press waits on every screen, 0-4: shorter catch-ups for a later press
+export type Rules = { goals: number; capSec: number; finalGoals: number; finalCapSec: number; modifiers: boolean; equalDelay?: boolean; net?: Net; inputDelay?: number };
 export type Tournament = {
   code: string; name: string; createdAt: number; adminKeyHash: string;
   status: 'lobby' | 'running' | 'finished';
   rules: Rules; players: Player[]; matches: Match[]; rounds: number;
   champion: string | null; startedAt?: number; finishedAt?: number;
+  upNext?: string | null;         // the organiser picked this match to be played next
 };
 
-export const DEFAULT_RULES: Rules = { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true, equalDelay: false };
+// one match at a time: about 90 seconds a match fits 15 matches (16 players) into a 30-minute slot
+export const DEFAULT_RULES: Rules = { goals: 3, capSec: 90, finalGoals: 5, finalCapSec: 150, modifiers: true, equalDelay: false, net: 'server', inputDelay: 2 };
 export const MAX_PLAYERS = 64;
 
 export function roundName(round: number, rounds: number): string {
@@ -31,15 +39,25 @@ export function roundName(round: number, rounds: number): string {
   return 'Round of ' + (2 ** (left + 1));
 }
 
-export function rulesFor(t: Pick<Tournament, 'rules' | 'rounds'>, round: number) {
+// a match's rules; serverOn: whether this site has a match server (without one, matches run peer to peer)
+export function rulesFor(t: Pick<Tournament, 'rules' | 'rounds'>, round: number, serverOn = false, m?: Pick<Match, 'net'>) {
   const final = round === t.rounds;
   return {
     goals: final ? t.rules.finalGoals : t.rules.goals,
     capSec: final ? t.rules.finalCapSec : t.rules.capSec,
     modifiers: t.rules.modifiers,
     equalDelay: !!t.rules.equalDelay,
+    net: (m && m.net) || netRule(t.rules, serverOn),
+    inputDelay: inputDelayOf(t.rules),
     label: roundName(round, t.rounds)
   };
+}
+export function netRule(r: Pick<Rules, 'net'>, serverOn: boolean): Net {
+  return serverOn && r.net !== 'p2p' ? 'server' : 'p2p';
+}
+export function inputDelayOf(r: Pick<Rules, 'inputDelay'>) {
+  const n = Math.round(Number(r.inputDelay ?? DEFAULT_RULES.inputDelay));
+  return Number.isFinite(n) ? Math.min(4, Math.max(0, n)) : 2;
 }
 
 // 1 v 16, 8 v 9, ... so the top seeds meet last and byes go to the top seeds
@@ -78,6 +96,7 @@ export function buildBracket(t: Tournament, rand: () => number = Math.random) {
   t.matches = matches;
   t.rounds = rounds;
   t.champion = null;
+  t.upNext = null;
   t.status = 'running';
   t.startedAt = Date.now();
   // byes: a lone player goes straight through
@@ -96,6 +115,7 @@ function nextOf(t: Tournament, m: Match) {
 
 function finish(t: Tournament, m: Match, winner: string, score: [number, number], via: Match['via']) {
   m.winner = winner; m.score = score; m.status = 'done'; m.via = via; m.endedAt = Date.now(); m.updatedAt = Date.now();
+  if (t.upNext === m.id) t.upNext = null;
   const nx = nextOf(t, m);
   if (!nx) { t.champion = winner; t.status = 'finished'; t.finishedAt = Date.now(); return; }
   nx.match[nx.slot] = winner;
@@ -105,13 +125,39 @@ function finish(t: Tournament, m: Match, winner: string, score: [number, number]
 export type ResultError = 'no-match' | 'not-ready' | 'already-done' | 'bad-winner' | 'next-started';
 
 // a match kicking off (online, or on one device when local)
-export function markLive(m: Match, local?: 'admin' | 'host') {
+export function markLive(m: Match, local?: 'admin' | 'host', net?: Net, t?: Tournament) {
   if (m.status !== 'ready' && m.status !== 'live') return false;
   if (m.status === 'ready') { m.startedAt = Date.now(); m.score = [0, 0]; }
   m.status = 'live';
   if (local) m.local = local;
+  if (net && !m.net) m.net = net;
+  if (t && t.upNext === m.id) t.upNext = null;           // the organiser's pick has started
   m.updatedAt = Date.now();
   return true;
+}
+
+/* ---------------- one match at a time ---------------- */
+// the order the matches are played in: round by round, top to bottom of the bracket
+export function playingOrder(t: Pick<Tournament, 'matches'>): Match[] {
+  return t.matches.slice().sort((a, b) => a.round - b.round || a.index - b.index);
+}
+// The match on now, or called next: one that is live; else the one the organiser picked;
+// else the first ready one in playing order. Byes and finished matches are skipped.
+export function currentMatch(t: Pick<Tournament, 'matches' | 'status' | 'upNext'>): Match | null {
+  if (t.status !== 'running') return null;
+  const order = playingOrder(t);
+  const live = order.find(m => m.status === 'live');
+  if (live) return live;
+  const pick = t.upNext ? order.find(m => m.id === t.upNext && m.status === 'ready') : null;
+  return pick || order.find(m => m.status === 'ready') || null;
+}
+// the matches still to play, in the order they come up: the current one first
+export function matchQueue(t: Pick<Tournament, 'matches' | 'status' | 'upNext'>): Match[] {
+  const cur = currentMatch(t);
+  if (!cur) return [];
+  const rest = playingOrder(t).filter(m => m !== cur && m.status !== 'done');
+  const pick = t.upNext ? rest.find(m => m.id === t.upNext && m.status === 'ready') : null;
+  return [cur, ...(pick ? [pick] : []), ...rest.filter(m => m !== pick)];
 }
 
 // record a result; admins may correct a finished match as long as the next one has not started
@@ -141,19 +187,24 @@ export function resetMatch(t: Tournament, id: string): ResultError | null {
     if (nx) { nx.match[nx.slot] = null; nx.match.status = 'waiting'; }
     else { t.champion = null; t.status = 'running'; }
   }
-  m.winner = null; m.score = [0, 0]; m.via = undefined; m.local = undefined; m.startedAt = undefined; m.endedAt = undefined;
+  m.winner = null; m.score = [0, 0]; m.via = undefined; m.local = undefined; m.net = undefined; m.startedAt = undefined; m.endedAt = undefined;
   m.status = m.a && m.b ? 'ready' : 'waiting';
+  m.gen = (m.gen || 0) + 1;
   m.updatedAt = Date.now();
   return null;
 }
 
-// what the public sees: no token or admin hashes
-export function publicView(t: Tournament) {
+// what the public sees: no token or admin hashes. serverOn: this site has a match server
+export function publicView(t: Tournament, serverOn = false) {
+  const queue = matchQueue(t).map(m => m.id);
   return {
     code: t.code, name: t.name, status: t.status, rules: { ...DEFAULT_RULES, ...t.rules }, rounds: t.rounds, champion: t.champion,
     startedAt: t.startedAt || null, finishedAt: t.finishedAt || null,
+    matchServer: serverOn,
+    // one match at a time: the match on now, the one after it, and everything still to play in order
+    current: queue[0] || null, next: queue[1] || null, queue, upNext: t.upNext || null,
     players: t.players.map(p => ({ id: p.id, name: p.name, flag: p.flag, color: p.color })),
-    matches: t.matches.map(m => ({ ...m, label: roundName(m.round, t.rounds), ...{ rules: rulesFor(t, m.round) } }))
+    matches: t.matches.map(m => ({ ...m, label: roundName(m.round, t.rounds), ...{ rules: rulesFor(t, m.round, serverOn, m) } }))
   };
 }
 export type PublicTournament = ReturnType<typeof publicView>;

@@ -3,7 +3,7 @@
 // page and in the lobby while players wait for the draw.
 import { useEffect, useRef, useState } from 'react';
 import GameView from './GameView';
-import { Snd } from '@/lib/engine/shared';
+import { Snd } from '@/lib/engine/sound';
 import { BOTS_ALLOWED, saved } from '@/lib/client';
 import type { GameApi } from '@/lib/engine/types';
 

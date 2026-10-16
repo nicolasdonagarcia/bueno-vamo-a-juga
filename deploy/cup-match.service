@@ -1,0 +1,21 @@
+# The Coterie Cup: the match server (runs the live match's physics). Its own service, so
+# a deploy of the app never stops a match. setup.sh installs it as
+# /etc/systemd/system/cup-match.service
+[Unit]
+Description=The Coterie Cup match server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cup
+WorkingDirectory=/srv/cup
+EnvironmentFile=/etc/cup.env
+Environment=NODE_ENV=production MATCH_PORT=3001 MATCH_HOST=127.0.0.1
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/main.ts
+Restart=always
+RestartSec=1
+# the match loop wants the processor when it is due
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

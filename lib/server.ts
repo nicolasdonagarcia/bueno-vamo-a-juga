@@ -3,6 +3,16 @@ import type { Tournament, Player } from './tournament';
 import { getStore, storeProblem } from './store';
 import { CODE_CHARS, normCode } from './code';
 
+// The match server, when this site has one:
+//   MATCH_SERVER_URL  where browsers reach it: wss://cup.example.com/ws, /ws (this site's own
+//                     address) or :3001/ws (this site's host name on another port)
+//   MATCH_SECRET      shared with the match server: it signs the tickets and its reports
+// Without both, online matches run peer to peer between the two browsers.
+export function matchServer(): { url: string; secret: string } | null {
+  const url = (process.env.MATCH_SERVER_URL || '').trim(), secret = process.env.MATCH_SECRET || '';
+  return url && secret.length >= 16 ? { url, secret } : null;
+}
+
 export function hash(s: string) { return createHash('sha256').update(s).digest('hex'); }
 export function secret() { return randomBytes(18).toString('base64url'); }
 export function id() { return randomBytes(6).toString('base64url'); }

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { COLORS, Snd } from '@/lib/engine/shared';
+import { COLORS } from '@/lib/engine/shared';
+import { Snd } from '@/lib/engine/sound';
 import { FLAG_LIST, guessFlag } from '@/lib/flags';
 import { api, saved, type Profile, type SavedPlayer } from '@/lib/client';
 import { Flag } from './bits';

@@ -228,12 +228,12 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .play-page .topbar { padding-block: 0 10px; }
 .controls { margin: 10px 0 0; }
 .arena { position: relative; width: 100%; height: min(78vh, calc((100vw - 32px) * 0.68)); min-height: 240px; container-type: size; }
-.arena.full { height: max(min(calc(100dvh - 118px), calc((100vw - 32px) * 0.6792)), min(56vh, 460px)); }
+.arena.full { height: max(min(calc(100dvh - 142px), calc((100vw - 32px) * 0.6792)), min(56vh, 460px)); }
 @media (max-height: 520px) and (orientation: landscape) {
   .play-page { padding-block: 4px; }
   .play-page .topbar { padding-block: 0 4px; }
   .play-page .brand span { display: none; }
-  .controls { display: none; }
+  .controls, .net-line { display: none; }
   .arena.full { height: calc(100dvh - 52px); min-height: 0; }
 }
 @media (max-width: 640px) { .hide-small { display: none; } }
@@ -295,40 +295,25 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 @keyframes arrive { from { transform: scale(.7); opacity: 0 } to { transform: none; opacity: 1 } }
 .progress-line { margin: 0; display: flex; gap: 14px; align-items: center; font-size: 20px; flex-wrap: wrap; }
 .progress-line b { font: 400 28px/1 var(--display); }
-/* every match being played, sharing the screen; one tile can fill it */
-.screen.grid-mode { height: 100dvh; min-height: 0; overflow: hidden; padding-bottom: 10px; gap: 12px; }
+/* the live match, filling the screen (the cup plays one match at a time) */
+.screen.live-mode { height: 100dvh; min-height: 0; overflow: hidden; padding-bottom: 10px; gap: 10px; }
 .screen-head .seg button { font-size: 16px; padding: 9px 14px; }
-.match-grid { flex: 1; min-height: 0; display: grid; grid-auto-rows: minmax(0, 1fr); gap: 12px; }
-.tile { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: #0b1033; overflow: hidden; container-type: inline-size; }
-@container (max-width: 380px) {      /* narrow tiles: names before flags */
-  .tile-names .flag, .tile-names .dot, .tile-num { display: none; }
-  .tile-head { gap: 6px; }
-}
-.tile.live { border-color: rgba(255, 77, 109, .5); }
-.tile-head { flex: none; height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel-solid); }
-.tile-num { flex: none; width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; font: 900 13px/1 var(--body); color: var(--muted); border: 1px solid var(--line-strong); }
-.tile-names { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; font: 400 clamp(15px, 1.2vw, 21px)/1.1 var(--display); }
+.live-match { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; background: #0b1033; overflow: hidden; }
+.live-head { flex: none; height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel-solid); }
+.live-label { flex: none; font: 400 clamp(16px, 1.4vw, 22px)/1 var(--display); color: var(--muted); }
+.tile-names { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; font: 400 clamp(18px, 1.7vw, 28px)/1.1 var(--display); }
 .tile-names .chip { font: inherit; flex: 0 1 auto; }
-.tile.max .tile-names { font-size: clamp(18px, 1.7vw, 28px); }
-.tile-btn { flex: none; appearance: none; height: 34px; min-width: 34px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px; cursor: pointer;
-  border: 1px solid var(--line-strong); background: rgba(255, 255, 255, .05); color: var(--ink); font: 800 14px/1 var(--body); }
-.tile-btn:hover { border-color: var(--gold); color: var(--gold); }
-.tile-btn.on { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); padding-inline: 10px 12px; }
-.tile-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.tile-body { position: relative; flex: 1; min-height: 0; }
-.tile-body.can-grow { cursor: zoom-in; }
-.tile .arena { height: 100%; min-height: 0; }
+.live-body { position: relative; flex: 1; min-height: 0; }
+.live-body .stage-wrap, .live-body .arena { height: 100%; min-height: 0; }
 .tile-static { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center; }
 .tile-static .final-score b { font-size: clamp(30px, 4vw, 56px); }
 .tile-static .note { max-width: 40ch; }
-.arena.in-tile:not(.with-sound) .wc-mute { display: none; }     /* only the match filling the screen has sound */
-.arena.in-tile .ovl > .card.tight { padding: clamp(6px, 2.4cqh, 12px) clamp(10px, 3cqw, 16px); }
-.arena.in-tile .tile-end { gap: clamp(4px, 1.8cqh, 10px); }
-.arena.in-tile .tile-end .final-score b { font-size: clamp(22px, 9cqh, 44px); }
-.arena.in-tile .tile-end .lead, .arena.in-tile .tile-end .chip { font-size: clamp(13px, 4.2cqh, 19px); }
-.arena.in-tile .viewer-wait { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.arena.in-tile .ready-tag { font-size: clamp(11px, 3.4cqh, 14px); padding: 4px 8px; }
-.grid-hint { margin: 0; }
+.up-next { margin: 0; }
+.up-next .chip { font-size: inherit; }
+/* a match page: the pitch, and the network line under it */
+.stage-wrap { display: flex; flex-direction: column; gap: 6px; }
+.net-line { margin: 0; min-height: 1.4em; display: flex; gap: 12px; justify-content: center; align-items: baseline; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.net-line .link { font-size: inherit; }
 .champion-screen { position: relative; display: flex; align-items: center; justify-content: center; gap: 36px; padding: 18px; flex-wrap: wrap; overflow: hidden; border-radius: 22px;
   background: radial-gradient(ellipse at 50% 40%, rgba(255, 212, 59, .16), transparent 70%); }
 .trophy.big { width: clamp(120px, 16vw, 220px); height: auto; filter: drop-shadow(0 0 40px rgba(255, 212, 59, .5)); animation: lift 2.4s ease-in-out infinite; }

@@ -10,7 +10,8 @@ import PracticeArena from '@/components/PracticeArena';
 import { Brand, Loading, PlayerChip } from '@/components/bits';
 import { ChampionBanner } from '@/components/Champion';
 import { BOTS_ALLOWED, api, myStatus, playerOf, rulesLine, useIdentity, useTournament, type MyStatus, type View } from '@/lib/client';
-import { COLORS, Snd } from '@/lib/engine/shared';
+import { COLORS } from '@/lib/engine/shared';
+import { Snd } from '@/lib/engine/sound';
 import { FLAG_LIST } from '@/lib/flags';
 import type { PublicMatch } from '@/lib/tournament';
 
@@ -90,10 +91,11 @@ export default function Hub({ code, bot, botName }: { code: string; bot: string;
   }
 
   const mine = playerOf(t, me);
-  // only your own matches open from here: the organiser shows all of them on the big screen
+  // only your own match opens from here, once it is on: the organiser shows the live match on the big screen
   const hrefFor = (m: PublicMatch) => {
     if (m.status !== 'ready' && m.status !== 'live') return null;
     if (!me || (m.a !== me && m.b !== me)) return null;
+    if (m.status !== 'live' && t.current !== m.id) return null;
     return '/t/' + code + '/m/' + m.id + botQ;
   };
 
@@ -190,6 +192,22 @@ function StatusCard({ t, code, status, botQ }: { t: View; code: string; status: 
         <p className="lead vs-line"><PlayerChip p={playerOf(t, me)} me /> <span className="vs-x">vs</span> <PlayerChip p={opp} /></p>
         {where ? <p className="note">Being played {where}.</p> : null}
         <div className="row"><Link className="btn big" href={'/t/' + code + '/m/' + m.id + botQ}>{m.status === 'live' ? 'Back to the match' : 'Play'}</Link></div>
+      </div>
+    );
+  }
+  if (status.kind === 'queued') {
+    const m = status.m, now = status.now;
+    const opp = playerOf(t, m.a === me ? m.b : m.a);
+    return (
+      <div className="card status-card">
+        <p className="kicker">{m.label} · {rulesLine(m.rules)}</p>
+        <h1 className="h2">{status.before <= 1 ? 'You’re up next' : status.before + ' matches before yours'}</h1>
+        <p className="lead vs-line"><PlayerChip p={playerOf(t, me)} me /> <span className="vs-x">vs</span> <PlayerChip p={opp} /></p>
+        {now ? (
+          <p className="note">Now playing: <PlayerChip p={playerOf(t, now.a)} /> vs <PlayerChip p={playerOf(t, now.b)} />
+            {now.status === 'live' ? <> · <span className="pill live">{now.score[0]}–{now.score[1]}</span></> : ' · about to start'}</p>
+        ) : null}
+        <p className="note small">One match at a time. Keep this page open: it tells you when it’s your turn.</p>
       </div>
     );
   }

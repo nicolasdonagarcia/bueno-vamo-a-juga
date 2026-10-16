@@ -6,6 +6,7 @@
 //
 //   NEXT_PUBLIC_BOTS=1 npm run build && npm start
 //   node test/features.mjs     (BASE, CHROME, OUT, ONLY=landing,practice,...; PROD=<url of a normal build>; NOSTORE=<url of a Vercel build without Redis>)
+// With a match server, online matches run on it; 'online-p2p' plays one peer to peer too.
 import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 const { chromium, devices } = createRequire(import.meta.url)('playwright');
@@ -250,22 +251,36 @@ await step('admin', 'admin page: share, copy, rules, players, draw, results, res
   await p.getByRole('button', { name: 'Save rules' }).click();
   await p.getByText('Saved', { exact: true }).waitFor({ timeout: 5000 });
   let v = await c.view();
-  check(JSON.stringify(v.rules) === JSON.stringify({ goals: 2, capSec: 120, finalGoals: 3, finalCapSec: 180, modifiers: false, equalDelay: false }), 'rules saved: ' + JSON.stringify(v.rules));
+  const want = { goals: 2, capSec: 120, finalGoals: 3, finalCapSec: 180, modifiers: false, equalDelay: false, net: 'server', inputDelay: 2 };
+  check(JSON.stringify(v.rules) === JSON.stringify(want), 'rules saved: ' + JSON.stringify(v.rules));
   check(v.name === 'Friday Cup', 'renamed');
-  // online without prediction, and back
+  const sw = p.getByRole('radiogroup', { name: 'Online matches run' });
+  if (v.matchServer) {
+    // the input delay, on the match server
+    await p.getByLabel('Input delay').selectOption('3');
+    await p.getByRole('button', { name: 'Save rules' }).click();
+    await until(async () => (await c.view()).rules.inputDelay === 3, 5000, 'input delay saved');
+    // the organiser's switch: peer to peer, where Equal delay is
+    await sw.getByRole('radio', { name: 'Peer to peer' }).click();
+    check(!(await p.getByLabel('Input delay').count()), 'input delay shown peer to peer');
+  } else {
+    check(await sw.getByRole('radio', { name: 'On the match server' }).isDisabled(), 'the match server can be picked without one');
+  }
+  // peer to peer without prediction, and back
   await p.getByLabel(/Equal delay instead of prediction/).check();
   await p.getByRole('button', { name: 'Save rules' }).click();
-  await until(async () => (await c.view()).rules.equalDelay === true, 5000, 'equal delay saved');
+  await until(async () => { const r = (await c.view()).rules; return r.equalDelay === true && (r.net === 'p2p' || !v.matchServer); }, 5000, 'equal delay saved');
   await p.getByLabel(/Equal delay instead of prediction/).uncheck();
+  if (v.matchServer) await sw.getByRole('radio', { name: 'On the match server' }).click();
   await p.getByRole('button', { name: 'Save rules' }).click();
-  await until(async () => (await c.view()).rules.equalDelay === false, 5000, 'prediction back on');
+  await until(async () => { const r = (await c.view()).rules; return r.equalDelay === false && r.net === 'server'; }, 5000, 'back on the match server');
   // players: remove one (the × asks first; Keep leaves them in)
   await p.getByRole('button', { name: 'Remove Ed' }).click();
   await p.getByRole('button', { name: 'Keep' }).click();
   await p.getByRole('button', { name: 'Remove Ed' }).click();
   await p.getByRole('button', { name: 'Yes, remove Ed' }).click();
   await until(async () => (await c.view()).players.length === 4, 5000, 'Ed removed');
-  await p.getByText(/rounds · about/).waitFor({ timeout: 5000 });
+  await p.getByText(/3 matches, one at a time · up to about/).waitFor({ timeout: 5000 });
   await p.screenshot({ path: OUT + '/admin-lobby.png', fullPage: true });
   // the draw
   await p.getByRole('button', { name: 'Make the draw and start' }).click();
@@ -274,6 +289,15 @@ await step('admin', 'admin page: share, copy, rules, players, draw, results, res
   check(v.status === 'running', 'not running after the draw');
   const [m1, m2] = v.matches.filter(m => m.round === 1);
   const rows = p.locator('.match-row');
+  // one match at a time: the first is on, the second next; the organiser can call the second first
+  await rows.nth(0).locator('.pill', { hasText: 'On now' }).waitFor({ timeout: 5000 });
+  await rows.nth(1).locator('.pill', { hasText: 'Next' }).waitFor({ timeout: 5000 });
+  await rows.nth(1).getByRole('button', { name: 'Manage' }).click();
+  await rows.nth(1).getByRole('button', { name: 'Play this one next' }).click();
+  await until(async () => (await c.view()).current === m2.id, 5000, 'the second match called first');
+  await rows.nth(1).locator('.pill', { hasText: 'On now' }).waitFor({ timeout: 5000 });
+  await rows.nth(0).locator('.pill', { hasText: 'Next' }).waitFor({ timeout: 5000 });
+  await rows.nth(1).getByRole('button', { name: 'Close' }).click();
   // a result typed in
   await rows.nth(0).getByRole('button', { name: 'Manage' }).click();
   const r0 = rows.nth(0);
@@ -349,49 +373,57 @@ await step('join', 'joining from the page: form, edit, removed by the organiser,
 });
 
 // ---------------------------------------------------------------- player page through a cup
-await step('hub', 'the player page through a whole cup: ready, title, own link only, waiting, knocked out, champion', async () => {
-  const c = await cup(['Marta', 'Ben', 'Cy', 'Di', 'Ed'], { goals: 2, capSec: 60, finalGoals: 3, finalCapSec: 90, modifiers: true });
+await step('hub', 'the player page through a whole cup: up next, ready, title, own link only, knocked out, champion', async () => {
+  const c = await cup(['Marta', 'Ben', 'Cy', 'Di', 'Ed', 'Flo'], { goals: 2, capSec: 60, finalGoals: 3, finalCapSec: 90, modifiers: true });
   const marta = c.ps[0];
   const p = await open('/t/' + c.code, { storage: c.store(marta), label: 'hub Marta' });
   await p.getByText('You\'re in').waitFor({ timeout: 10000 });
   const outsider = await open('/t/' + c.code, { label: 'hub outsider' });
   await c.admin('start');
   let v = await c.view();
-  // her latest match, as the page sees it (after a bye that is the round-2 match)
-  const mine = v.matches.filter(m => m.a === marta.playerId || m.b === marta.playerId).sort((x, y) => y.round - x.round)[0];
-  const viewers = [];
+  // her first match: a real one (on now, or after the one on now) or a bye
+  const mine = v.matches.filter(m => m.a === marta.playerId || m.b === marta.playerId).sort((x, y) => x.round - y.round)[0];
+  const notes = [];
   await outsider.getByText('The draw has been made, so entries are closed').waitFor({ timeout: 10000 });
-  if (mine.status === 'ready') {
+  if (mine.via === 'bye') {
+    await p.getByRole('heading', { name: 'You’re through!' }).waitFor({ timeout: 10000 });
+    notes.push('bye');
+  } else {
+    if (v.current !== mine.id) {
+      // one match at a time: hers comes after the one on now, and her match page waits for it
+      await p.getByRole('heading', { name: 'You’re up next' }).waitFor({ timeout: 10000 });
+      await p.getByText('Now playing:').waitFor({ timeout: 5000 });
+      check(!(await p.title()).startsWith('▶'), 'the tab says play before her turn');
+      check(!(await p.locator('.bracket a[href*="/m/"]').count()), 'a match link before her turn');
+      const early = await open('/t/' + c.code + '/m/' + mine.id, { storage: c.store(marta), label: 'early' });
+      await early.getByRole('heading', { name: 'You’re up next' }).waitFor({ timeout: 10000 });
+      await c.admin('result', { matchId: v.current, winner: 'a', score: [2, 0] });
+      notes.push('up next');
+    }
     await p.getByRole('heading', { name: 'Your match is ready' }).waitFor({ timeout: 10000 });
     await until(async () => (await p.title()).startsWith('▶ Your match'), 5000, 'tab title');
     check((await p.getByRole('link', { name: 'Play' }).getAttribute('href')) === '/t/' + c.code + '/m/' + mine.id, 'Play link');
     const links = await p.locator('.bracket a[href*="/m/"]').evaluateAll(as => as.map(a => a.getAttribute('href')));
     check(links.length === 1 && links[0].endsWith(mine.id), 'bracket links: ' + JSON.stringify(links));
     // someone else's match
+    v = await c.view();
     const other = v.matches.find(m => m.status === 'ready' && m.id !== mine.id);
     if (other) {
       const n = await open('/t/' + c.code + '/m/' + other.id, { storage: c.store(marta), label: 'not mine' });
       await n.getByText('Not your match').waitFor({ timeout: 10000 });
-      viewers.push('not-your-match ok');
+      notes.push('not-your-match ok');
     }
     // Marta loses her first match
-    const base = '/t/' + c.code + '/m/' + mine.id;
-    const host = c.who(mine.a);
-    await call('/api' + base + '/report', { token: host.token, kind: 'final', score: mine.a === marta.playerId ? [0, 2] : [2, 0], winner: mine.a === marta.playerId ? 'b' : 'a' });
+    await c.admin('result', { matchId: mine.id, winner: mine.a === marta.playerId ? 'b' : 'a', score: mine.a === marta.playerId ? [0, 2] : [2, 0] });
     await p.getByRole('heading', { name: 'Knocked out' }).waitFor({ timeout: 10000 });
-  } else {
-    // a bye: through to round 2, waiting for the other match
-    await p.getByRole('heading', { name: 'You’re through!' }).waitFor({ timeout: 10000 });
-    viewers.push('bye');
   }
-  // play out the rest of the cup through the API
-  for (let guard = 0; guard < 10; guard++) {
+  // the organiser enters the rest of the results, one match at a time
+  for (let guard = 0; guard < 12; guard++) {
     v = await c.view();
     if (v.status === 'finished') break;
-    for (const m of v.matches.filter(m => m.status === 'ready')) {
-      const g = m.rules.goals;
-      await call('/api/t/' + c.code + '/m/' + m.id + '/report', { token: c.who(m.a).token, kind: 'final', score: [g, 0], winner: 'a' });
-    }
+    const m = v.matches.find(x => x.id === v.current);
+    check(m, 'nothing on with the cup running');
+    await c.admin('result', { matchId: m.id, winner: 'a', score: [m.rules.goals, 0] });
   }
   v = await c.view();
   check(v.status === 'finished', 'cup not finished');
@@ -400,7 +432,7 @@ await step('hub', 'the player page through a whole cup: ready, title, own link o
   await p.screenshot({ path: OUT + '/hub-finished.png', fullPage: true });
   const cp = await open('/t/' + c.code, { storage: c.store(champ), label: 'hub champion' });
   await cp.getByText('You won Feature Cup').waitFor({ timeout: 10000 });
-  return viewers.join(', ');
+  return notes.join(', ');
 });
 
 // ---------------------------------------------------------------- match pages: odd links
@@ -435,30 +467,35 @@ async function onlineMatch(rules, names = ['Host', 'Guest']) {
   return { c, m, path, H, G };
 }
 
-await step('online', 'online match: ready check, connection line, keys on both sides, mute, golden goal, the end on both screens', async () => {
-  const o = await onlineMatch({ goals: 9, capSec: 6, finalGoals: 9, finalCapSec: 6, modifiers: false });
+async function onlineStep(net) {
+  const o = await onlineMatch({ goals: 9, capSec: 6, finalGoals: 9, finalCapSec: 6, modifiers: false, net });
+  const server = o.m.rules.net === 'server';
   await o.H.locator('.ovl').getByText('First to 9 · 0:06 min cap, then golden goal').waitFor({ timeout: 10000 });
-  await o.H.getByText('Connected directly').waitFor({ timeout: 20000 });
+  await o.H.getByText(server ? 'On the match server' : 'Connected directly').waitFor({ timeout: 20000 });
   await o.H.getByRole('button', { name: 'I\'m ready' }).click();
-  await o.G.getByText(o.c.who(o.m.a).name + ' is ready').waitFor({ timeout: 10000 });      // the draw decides who hosts
+  await o.G.getByText(o.c.who(o.m.a).name + ' is ready').waitFor({ timeout: 10000 });      // the draw decides who is on the left
   await o.G.getByRole('button', { name: 'I\'m ready' }).click();
   await until(() => o.H.evaluate(() => window.__cc.game.phase === 'play'), 10000, 'kick-off');
+  check(await o.H.evaluate(() => window.__cc.transport) === (server ? 'server' : 'p2p'), 'transport');
   await quiet(o.H, 'cc');
   await o.H.keyboard.press('Space');
   await pressed(o.H, 'cc', [0, 1]);
   await quiet(o.H, 'cc');
   await o.G.keyboard.press('ArrowUp');
-  await pressed(o.H, 'cc', [2, 3], 1500);              // the guest's press, applied on the host
+  await pressed(o.H, 'cc', [2, 3], 1500);              // the right-hand player's press, on the left-hand player's screen
   await quiet(o.H, 'cc');
   await o.G.keyboard.press('KeyD');
-  await pressed(o.H, 'cc', [3], 1500);                 // D: only the guest's right-hand man
+  await pressed(o.H, 'cc', [3], 1500);                 // D: only their right-hand man
   await quiet(o.H, 'cc');
   await o.H.keyboard.press('KeyA');
-  await pressed(o.H, 'cc', [0]);                       // A: only the host's left-hand man
+  await pressed(o.H, 'cc', [0]);                       // A: only the left-hand player's left-hand man
+  if (server) await pressed(o.G, 'cc', [0], 1500);     // and on the other screen
   const mute = o.G.locator('.wc-mute');
   await o.G.keyboard.press('KeyM');
   check((await mute.getAttribute('aria-pressed')) === 'true', 'M did not mute the guest');
   await o.G.keyboard.press('KeyM');
+  // the network line under the pitch
+  await o.G.locator('.net-line', { hasText: server ? 'Server' : 'Other player' }).waitFor({ timeout: 5000 });
   // the 6 s limit: golden goal if level, otherwise the leader wins on time
   await until(() => o.H.evaluate(() => window.__cc.game.phase === 'end' || /Golden goal/.test(document.querySelector('.wc-clock').textContent)), 20000, 'time up');
   const level = await o.H.evaluate(() => /Golden goal/.test(document.querySelector('.wc-clock').textContent));
@@ -475,9 +512,12 @@ await step('online', 'online match: ready check, connection line, keys on both s
   await o.H.getByRole('heading', { name: hostWon ? 'Champion!' : 'Knocked out' }).waitFor({ timeout: 15000 });
   await o.G.getByRole('heading', { name: hostWon ? 'Knocked out' : 'Champion!' }).waitFor({ timeout: 15000 });
   await o.H.getByText('Result saved').waitFor({ timeout: 10000 });
-  await o.G.screenshot({ path: OUT + '/online-end-guest.png' });
-  return path + ' ' + done.score.join('–');
-});
+  if (server) await o.G.getByText('Result saved').waitFor({ timeout: 10000 });
+  await o.G.screenshot({ path: OUT + '/online-end-' + (server ? 'server' : 'p2p') + '.png' });
+  return (server ? 'match server, ' : 'peer to peer, ') + path + ' ' + done.score.join('–');
+}
+await step('online', 'online match: ready check, connection line, keys on both sides, mute, golden goal, the end on both screens', () => onlineStep('server'));
+await step('online-p2p', 'the same, peer to peer (the organiser\'s switch)', () => onlineStep('p2p'));
 
 await step('time-limit', 'time limit with a leader: the leader wins when time runs out', async () => {
   // a strong CPU host against an idle guest: the host leads when the 20 s run out
@@ -561,7 +601,7 @@ await step('screen-lobby', 'big screen lobby: QR, arrivals as they join, the dra
   await s.getByText('Ben 2', { exact: true }).waitFor({ state: 'detached', timeout: 6000 });
   await s.screenshot({ path: OUT + '/screen-lobby.png' });
   await s.getByRole('button', { name: 'Make the draw' }).click();
-  await s.locator('.tile').first().waitFor({ timeout: 10000 });
+  await s.locator('.live-match').waitFor({ timeout: 10000 });
   check((await c.view()).status === 'running', 'not running');
 });
 

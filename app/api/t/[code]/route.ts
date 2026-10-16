@@ -2,7 +2,7 @@
 // marks that player as online for the admin and big-screen views.
 import { getStore } from '@/lib/store';
 import { publicView } from '@/lib/tournament';
-import { json, loadOr404, playerByToken } from '@/lib/server';
+import { json, loadOr404, matchServer, playerByToken } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,5 +19,5 @@ export async function GET(req: Request, ctx: { params: Promise<{ code: string }>
     store.online(t.code, t.players.map(p => p.id))
   ]);
   if (me) online[me.id] = true;
-  return json({ ...publicView(t), online, you: me ? me.id : null, now: Date.now() });
+  return json({ ...publicView(t, !!matchServer()), online, you: me ? me.id : null, now: Date.now() });
 }

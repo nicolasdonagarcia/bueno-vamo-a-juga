@@ -36,7 +36,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         buildBracket(doc);
         return doc;
       case 'restart':
-        doc.status = 'lobby'; doc.matches = []; doc.rounds = 0; doc.champion = null; doc.startedAt = undefined; doc.finishedAt = undefined;
+        doc.status = 'lobby'; doc.matches = []; doc.rounds = 0; doc.champion = null; doc.startedAt = undefined; doc.finishedAt = undefined; doc.upNext = null;
         return doc;
       case 'rules': {
         const x = (b.rules || {}) as Record<string, unknown>;
@@ -46,7 +46,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
           finalGoals: intIn(x.finalGoals, 1, 9, doc.rules.finalGoals),
           finalCapSec: intIn(x.finalCapSec, 0, 900, doc.rules.finalCapSec),
           modifiers: x.modifiers === undefined ? doc.rules.modifiers : !!x.modifiers,
-          equalDelay: x.equalDelay === undefined ? !!doc.rules.equalDelay : !!x.equalDelay
+          equalDelay: x.equalDelay === undefined ? !!doc.rules.equalDelay : !!x.equalDelay,
+          net: x.net === 'p2p' ? 'p2p' : x.net === 'server' ? 'server' : doc.rules.net || 'server',
+          inputDelay: intIn(x.inputDelay, 0, 4, doc.rules.inputDelay ?? 2)
         };
         return doc;
       }
@@ -75,7 +77,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
         const m = getMatch(doc, matchId);
         if (!m) { error = MESSAGES['no-match']; return null; }
         if (!m.a || !m.b) { error = MESSAGES['not-ready']; return null; }
-        if (!markLive(m, 'admin')) { error = MESSAGES['already-done']; return null; }
+        const other = doc.matches.find(x => x.status === 'live' && x.id !== m.id);
+        if (other && m.status !== 'live') { error = 'Another match is being played. One match at a time: finish it first, or decide it.'; return null; }
+        if (!markLive(m, 'admin', undefined, doc)) { error = MESSAGES['already-done']; return null; }
+        return doc;
+      }
+      // one match at a time: play this ready match next (someone in the match on now is late, say)
+      case 'next': {
+        if (b.matchId === null || b.matchId === '') { doc.upNext = null; return doc; }
+        const m = getMatch(doc, matchId);
+        if (!m) { error = MESSAGES['no-match']; return null; }
+        if (m.status !== 'ready') { error = 'Only a match with both players and not started yet can go next.'; return null; }
+        doc.upNext = m.id;
         return doc;
       }
       case 'score': {
