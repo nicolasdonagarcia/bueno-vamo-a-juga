@@ -5,7 +5,8 @@
 //
 // Needs Playwright (npm i -D playwright, or NODE_PATH pointing at an install).
 // Env: BASE (http://localhost:3000), PLAYERS (4), GOALS (2), CAP (60), SKILL (0.7),
-//      CHROME (path to a Chromium binary), OUT (screenshot folder), WATCH=0 (no big screen)
+//      CHROME (path to a Chromium binary), OUT (screenshot folder), WATCH=0 (no big screen),
+//      EQUAL=1 (the "Equal delay" rule: guests draw the host's snapshots instead of predicting)
 // The organiser's big screen shows every match in a grid: each live match has to
 // show up there, and one is made to fill the screen once.
 import { createRequire } from 'module';
@@ -31,7 +32,7 @@ const t0 = Date.now();
 const stamp = () => ((Date.now() - t0) / 1000).toFixed(0).padStart(4) + 's';
 
 const { code, adminKey } = await call('/api/t', { name: 'E2E Cup' });
-await call('/api/t/' + code + '/admin', { key: adminKey, action: 'rules', rules: { goals: GOALS, capSec: CAP, finalGoals: GOALS, finalCapSec: CAP, modifiers: true } });
+await call('/api/t/' + code + '/admin', { key: adminKey, action: 'rules', rules: { goals: GOALS, capSec: CAP, finalGoals: GOALS, finalCapSec: CAP, modifiers: true, equalDelay: process.env.EQUAL === '1' } });
 console.log(stamp(), 'cup', code, 'players', N);
 
 const browser = await chromium.launch({
@@ -85,7 +86,8 @@ while (Date.now() - t0 < LIMIT_MS) {
         await screen.screenshot({ path: OUT + '/screen-grid.png' });
         gridShot = true;
       } else if (gridShot && !maxShot && fresh.length >= 2) {
-        await screen.getByRole('button', { name: 'Fill the screen with this match' }).first().click({ timeout: 5000 });
+        // 17 browser pages on one test machine keep the big screen busy: give the click time
+        await screen.getByRole('button', { name: 'Fill the screen with this match' }).first().click({ timeout: 20000 });
         await sleep(1500);
         if ((await screen.locator('.tile:not([hidden])').count()) !== 1) problems.push('maximize did not hide the other matches');
         await screen.screenshot({ path: OUT + '/screen-max.png' });

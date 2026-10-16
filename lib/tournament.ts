@@ -11,7 +11,8 @@ export type Match = {
   local?: 'admin' | 'host';       // being played on one device instead of online: the organiser's, or the host's
   startedAt?: number; endedAt?: number; updatedAt?: number;
 };
-export type Rules = { goals: number; capSec: number; finalGoals: number; finalCapSec: number; modifiers: boolean };
+// equalDelay: no prediction online: both players see the match equally late (the round trip)
+export type Rules = { goals: number; capSec: number; finalGoals: number; finalCapSec: number; modifiers: boolean; equalDelay?: boolean };
 export type Tournament = {
   code: string; name: string; createdAt: number; adminKeyHash: string;
   status: 'lobby' | 'running' | 'finished';
@@ -19,7 +20,7 @@ export type Tournament = {
   champion: string | null; startedAt?: number; finishedAt?: number;
 };
 
-export const DEFAULT_RULES: Rules = { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true };
+export const DEFAULT_RULES: Rules = { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true, equalDelay: false };
 export const MAX_PLAYERS = 64;
 
 export function roundName(round: number, rounds: number): string {
@@ -36,6 +37,7 @@ export function rulesFor(t: Pick<Tournament, 'rules' | 'rounds'>, round: number)
     goals: final ? t.rules.finalGoals : t.rules.goals,
     capSec: final ? t.rules.finalCapSec : t.rules.capSec,
     modifiers: t.rules.modifiers,
+    equalDelay: !!t.rules.equalDelay,
     label: roundName(round, t.rounds)
   };
 }
@@ -148,7 +150,7 @@ export function resetMatch(t: Tournament, id: string): ResultError | null {
 // what the public sees: no token or admin hashes
 export function publicView(t: Tournament) {
   return {
-    code: t.code, name: t.name, status: t.status, rules: t.rules, rounds: t.rounds, champion: t.champion,
+    code: t.code, name: t.name, status: t.status, rules: { ...DEFAULT_RULES, ...t.rules }, rounds: t.rounds, champion: t.champion,
     startedAt: t.startedAt || null, finishedAt: t.finishedAt || null,
     players: t.players.map(p => ({ id: p.id, name: p.name, flag: p.flag, color: p.color })),
     matches: t.matches.map(m => ({ ...m, label: roundName(m.round, t.rounds), ...{ rules: rulesFor(t, m.round) } }))

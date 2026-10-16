@@ -269,6 +269,7 @@ function RulesCard({ t, act }: { t: View; act: Act }) {
         {sel('Final: time limit', r.finalCapSec, CAPS, n => n ? fmtTime(n) + ', then golden goal' : 'No limit', n => setR({ ...r, finalCapSec: n }))}
       </div>
       <label className="check"><input type="checkbox" checked={r.modifiers} onChange={e => setR({ ...r, modifiers: e.target.checked })} /> Crazy rounds: after each goal the pitch may change (moon gravity, ice, big heads, a baseball, an American football…)</label>
+      <label className="check"><input type="checkbox" checked={!!r.equalDelay} onChange={e => setR({ ...r, equalDelay: e.target.checked })} /> Equal delay instead of prediction: both players see their match a moment late (the time a message takes there and back) and nothing slides into place. Only if prediction misbehaves.</label>
       <p className="note small">Changes apply to matches that haven&apos;t kicked off yet.</p>
       {a.error ? <p className="error">{a.error}</p> : null}
       <div className="row">

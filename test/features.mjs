@@ -250,8 +250,15 @@ await step('admin', 'admin page: share, copy, rules, players, draw, results, res
   await p.getByRole('button', { name: 'Save rules' }).click();
   await p.getByText('Saved', { exact: true }).waitFor({ timeout: 5000 });
   let v = await c.view();
-  check(JSON.stringify(v.rules) === JSON.stringify({ goals: 2, capSec: 120, finalGoals: 3, finalCapSec: 180, modifiers: false }), 'rules saved: ' + JSON.stringify(v.rules));
+  check(JSON.stringify(v.rules) === JSON.stringify({ goals: 2, capSec: 120, finalGoals: 3, finalCapSec: 180, modifiers: false, equalDelay: false }), 'rules saved: ' + JSON.stringify(v.rules));
   check(v.name === 'Friday Cup', 'renamed');
+  // online without prediction, and back
+  await p.getByLabel(/Equal delay instead of prediction/).check();
+  await p.getByRole('button', { name: 'Save rules' }).click();
+  await until(async () => (await c.view()).rules.equalDelay === true, 5000, 'equal delay saved');
+  await p.getByLabel(/Equal delay instead of prediction/).uncheck();
+  await p.getByRole('button', { name: 'Save rules' }).click();
+  await until(async () => (await c.view()).rules.equalDelay === false, 5000, 'prediction back on');
   // players: remove one
   await p.getByRole('button', { name: 'Remove Ed' }).click();
   await until(async () => (await c.view()).players.length === 4, 5000, 'Ed removed');

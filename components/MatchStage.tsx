@@ -1,7 +1,8 @@
 'use client';
 /* One online match on this device.
    host       player A: runs the physics, connects to the guest and up to four viewers
-   guest      player B: draws the host's snapshots and sends button presses
+   guest      player B: runs its own copy of the match a little ahead of the host, so
+              its presses show at once, and sends them to the host (see the engine)
    spectator  the organiser (needs the admin key): draws the host's snapshots,
               usually as one tile of the big screen's grid                        */
 import { useEffect, useRef, useState } from 'react';
@@ -76,7 +77,8 @@ export default function MatchStage(p: Props) {
     let dead = false, game: GameApi | null = null, link: LinkApi | null = null;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const later = (ms: number, fn: () => void) => { timers.push(setTimeout(() => { if (!dead) fn(); }, ms)); };
-    const S = { ready: [false, false] as [boolean, boolean], started: false, over: false, shown: false, paused: false, iAmReady: false,
+    // guestBuf: how long the guest's picture waits for frames (it says so every second); the host waits the trip plus that
+    const S = { ready: [false, false] as [boolean, boolean], started: false, over: false, shown: false, paused: false, iAmReady: false, guestBuf: 45, rtt: null as number | null,
       resumeTimer: 0 as unknown as ReturnType<typeof setTimeout>, finalBody: null as null | Record<string, unknown>, finalDone: false };
     const base = '/api/t/' + encodeURIComponent(P.code) + '/m/' + encodeURIComponent(P.m.id);
 
@@ -167,12 +169,22 @@ export default function MatchStage(p: Props) {
       const gameRules = { goals: P.m.rules.goals, capSec: P.m.rules.capSec, modifiers: P.m.rules.modifiers };
       const lite = P.tile ? { renderEvery: P.tile.hidden ? 1e9 : P.tile.every, maxDpr: P.tile.hd ? 2 : 1, sound: P.tile.sound }
         : P.bot ? { renderEvery: 3, maxDpr: 1 } : {};
+      // test builds: ?lag=75&jitter=10 adds that much one-way delay to what this side receives;
+      // ?net=fair turns prediction off like the organiser's "Equal delay" rule does (the guest
+      // draws the host's frames, the host waits as long)
+      const q = BOTS_ALLOWED ? new URLSearchParams(window.location.search) : null;
+      const fakeLag = q && q.get('lag') ? { ms: Number(q.get('lag')) || 0, jitter: Number(q.get('jitter')) || 0 } : undefined;
+      const predict = !P.m.rules.equalDelay && !(q && q.get('net') === 'fair');
+      // host: snapshots for the organiser's screen and the guest's fallback picture, 30 a second
+      // with prediction (the guest draws its own copy), every tick without it
       const g = createGame(rootRef.current, {
-        mode: role, players, rules: gameRules, bot: P.bot ? { skill: P.bot } : undefined, ...lite,
+        mode: role, players, rules: gameRules, bot: P.bot ? { skill: P.bot } : undefined, predict, snapEvery: predict ? 2 : 1, ...lite,
         hooks: {
           onSnapshot: (buf: ArrayBuffer) => link?.sendState(buf),
+          onFullState: (buf: ArrayBuffer) => link?.sendState(buf, 'guest'),
+          onPressAck: (seq: number, slack: number) => link?.send({ k: 'pa', q: seq, sl: slack }, 'guest'),
           onEvent: (ev: unknown) => link?.send({ k: 'ev', ev }),
-          onPress: (s: number[]) => link?.send({ k: 'press', s }),
+          onPress: (s: number[], vt?: number, n?: number, seq?: number) => link?.send({ k: 'press', s, vt, n, q: seq }),
           onScore: (sc: [number, number], info: { over: boolean }) => {
             if (role !== 'host') return;
             if (info.over) { S.over = true; reportFinal(sc); } else report('score', sc);
@@ -184,10 +196,14 @@ export default function MatchStage(p: Props) {
       game = g;
       gameRef.current = g;
       setGameOn(true);
-      g.setViewDelay(role === 'spectator' ? 160 : 70);
+      // With prediction the guest's own men react at once and the host draws its match as it
+      // happens. Without it the guest's picture waits only as long as its connection needs (at
+      // least 30 ms) and the host waits the round trip plus that, so both react equally late.
+      // The organiser's screen prefers smooth.
+      g.setViewDelay(role === 'spectator' ? 160 : role === 'guest' ? 30 : predict ? 0 : 75);
 
       const l = createLink({
-        code: P.code, matchId: P.m.id, role, token: P.token, adminKey: P.adminKey || undefined, iceServers: ice,
+        code: P.code, matchId: P.m.id, role, token: P.token, adminKey: P.adminKey || undefined, iceServers: ice, fakeLag,
         handlers: {
           log: BOTS_ALLOWED ? (s: string) => console.debug('[link ' + role + '] ' + s) : undefined,     // test builds: what the link is doing
           onDenied: () => set({ denied: true }),
@@ -196,6 +212,7 @@ export default function MatchStage(p: Props) {
               l.send(g.getSync(), key);
               l.send(lobbyMsg(), key);
               if (key === 'guest') {
+                g.resetGuest();
                 set({ conn: 'open' });
                 if (S.started && S.paused && !S.over) resumeSoon();
               }
@@ -222,7 +239,13 @@ export default function MatchStage(p: Props) {
           onCtl: (msg: Record<string, unknown>, key: string) => {
             if (role === 'host') {
               if (key !== 'guest') return;
-              if (msg.k === 'press' && Array.isArray(msg.s)) g.remotePress(msg.s as number[]);
+              if (msg.k === 'press' && Array.isArray(msg.s)) {
+                g.remotePress(msg.s as number[], typeof msg.vt === 'number' ? msg.vt : undefined,
+                  typeof msg.n === 'number' ? msg.n : undefined, typeof msg.q === 'number' ? msg.q : undefined);
+              } else if (msg.k === 'buf') {
+                S.guestBuf = Math.min(250, Math.max(20, Number(msg.ms) || 45));
+                if (S.rtt != null && !predict) g.setViewDelay(S.rtt + S.guestBuf);
+              }
               else if (msg.k === 'ready') { S.ready[1] = true; pushLobby(); maybeStart(); }
               return;
             }
@@ -238,9 +261,15 @@ export default function MatchStage(p: Props) {
               case 'start': S.started = true; set({ started: true }); break;
               case 'resume': set({ paused: true, resumeAt: Date.now() + Number(msg.ms || 3000) }); break;
               case 'resumed': set({ paused: false, resumeAt: null }); break;
+              case 'pa': g.pressAck(Number(msg.q), Number(msg.sl)); break;
             }
           },
-          onRtt: (rtt: number) => { if (role === 'host') g.setViewDelay(rtt + 70); set({ rtt }); },
+          onRtt: (rtt: number) => {
+            S.rtt = rtt;
+            if (role === 'host' && !predict) g.setViewDelay(rtt + S.guestBuf);
+            if (role === 'guest') g.setRtt(rtt);
+            set({ rtt });
+          },
           onRoute: (key: string, r: { relay: boolean } | null) => { if (r && (role !== 'host' || key === 'guest')) set({ relay: r.relay }); }
         }
       });
@@ -254,6 +283,10 @@ export default function MatchStage(p: Props) {
     })();
 
     // viewers: notice when the host's pictures stop coming
+    // the guest tells the host how long its picture waits, so the host can wait as long
+    const bufTimer = setInterval(() => {
+      if (role === 'guest' && game && link && link.isOpen()) link.send({ k: 'buf', ms: Math.round(game.viewDelay) });
+    }, 1000);
     const staleTimer = setInterval(() => {
       if (!game || role === 'host') return;
       const stale = S.started && !S.over && game.lastFrameAge > 2000;
@@ -263,7 +296,7 @@ export default function MatchStage(p: Props) {
 
     return () => {
       dead = true;
-      clearInterval(staleTimer);
+      clearInterval(staleTimer); clearInterval(bufTimer);
       timers.forEach(clearTimeout);
       clearTimeout(S.resumeTimer);
       window.removeEventListener('pagehide', onPageHide);

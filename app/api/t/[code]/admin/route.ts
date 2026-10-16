@@ -45,7 +45,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ code: string }
           capSec: intIn(x.capSec, 0, 900, doc.rules.capSec),
           finalGoals: intIn(x.finalGoals, 1, 9, doc.rules.finalGoals),
           finalCapSec: intIn(x.finalCapSec, 0, 900, doc.rules.finalCapSec),
-          modifiers: x.modifiers === undefined ? doc.rules.modifiers : !!x.modifiers
+          modifiers: x.modifiers === undefined ? doc.rules.modifiers : !!x.modifiers,
+          equalDelay: x.equalDelay === undefined ? !!doc.rules.equalDelay : !!x.equalDelay
         };
         return doc;
       }

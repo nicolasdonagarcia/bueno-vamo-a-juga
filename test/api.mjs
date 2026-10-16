@@ -52,7 +52,7 @@ await group('create a cup: name cleaned, code and key returned', async () => {
   const v = await view(a.code);
   assert.equal(v.name, 'bOffice/b Cup');
   assert.equal(v.status, 'lobby');
-  assert.deepEqual(v.rules, { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true });
+  assert.deepEqual(v.rules, { goals: 3, capSec: 180, finalGoals: 5, finalCapSec: 300, modifiers: true, equalDelay: false });
   const b = await ok('/api/t', { name: 'x'.repeat(60) });
   assert.equal((await view(b.code)).name.length, 18);
   const c = await ok('/api/t', {});
@@ -129,10 +129,14 @@ await group('organiser: rules are clamped, rename, remove players', async () => 
   const c = await cup(3);
   assert.equal((await c.admin('rules', { rules: { goals: 0, capSec: 5000, finalGoals: 99, finalCapSec: -4, modifiers: false } })).status, 200);
   let v = await view(c.code);
-  assert.deepEqual(v.rules, { goals: 1, capSec: 900, finalGoals: 9, finalCapSec: 0, modifiers: false });
+  assert.deepEqual(v.rules, { goals: 1, capSec: 900, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: false });
   await c.admin('rules', { rules: { goals: 'abc', capSec: 120 } });
   v = await view(c.code);
-  assert.deepEqual(v.rules, { goals: 1, capSec: 120, finalGoals: 9, finalCapSec: 0, modifiers: false });
+  assert.deepEqual(v.rules, { goals: 1, capSec: 120, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: false });
+  await c.admin('rules', { rules: { equalDelay: true } });            // online without prediction
+  v = await view(c.code);
+  assert.deepEqual(v.rules, { goals: 1, capSec: 120, finalGoals: 9, finalCapSec: 0, modifiers: false, equalDelay: true });
+  await c.admin('rules', { rules: { equalDelay: false } });
   await c.admin('rename', { name: 'Friday Cup' });
   await c.admin('rename', { name: '   ' });
   assert.equal((await view(c.code)).name, 'Friday Cup');
@@ -161,6 +165,7 @@ await group('the draw: needs two players, byes go through, entries close', async
   const ids = r1.flatMap(m => [m.a, m.b]).filter(Boolean).sort();
   assert.deepEqual(ids, v.players.map(p => p.id).sort());
   assert.ok(v.matches.every(m => m.label && m.rules && typeof m.rules.goals === 'number'));
+  assert.ok(v.matches.every(m => m.rules.equalDelay === false));           // prediction on unless the organiser says
   assert.equal(v.matches.find(m => m.round === 3).rules.goals, 5);          // the final's own rules
   assert.match(await err(409, '/api/t/' + c.code + '/join', { name: 'Late' }), /already started/);
   const p1 = await ok('/api/t/' + c.code + '/join', { name: 'Renamed', token: c.players[0].token });

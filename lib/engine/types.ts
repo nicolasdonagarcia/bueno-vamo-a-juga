@@ -9,7 +9,11 @@ export type EndEvent = { k: 'end'; winner: number; score: [number, number]; reas
 export type GameHooks = {
   onSnapshot?: (buf: ArrayBuffer) => void;
   onEvent?: (ev: Record<string, unknown>) => void;
-  onPress?: (slots: number[]) => void;
+  // guest: viewTime = the host-clock moment it was looking at; a predicting guest also sends
+  // the tick its copy applies the press on, and a sequence number the host acknowledges
+  onPress?: (slots: number[], viewTime?: number, tick?: number, seq?: number) => void;
+  onFullState?: (buf: ArrayBuffer) => void;                   // host: the full state for a predicting guest
+  onPressAck?: (seq: number, slack: number) => void;          // host: a guest press arrived with `slack` ticks to spare
   onScore?: (score: [number, number], info: { team: number; own: boolean; over: boolean }) => void;
   onEnd?: (e: { winner: number; score: [number, number]; reason: string }) => void;
   onEndShown?: (e: EndEvent) => void;
@@ -25,6 +29,8 @@ export type GameOpts = {
   seed?: number;
   hooks?: GameHooks;
   renderEvery?: number;
+  snapEvery?: number;
+  predict?: boolean;               // guest: run a copy ahead of the host (default true)
   maxDpr?: number;
   sound?: boolean;
   demoSound?: boolean;

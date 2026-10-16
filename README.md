@@ -30,6 +30,7 @@ In the worst case that is about 20 minutes of play, so it fits a 30-minute slot.
 | Two players can't connect, usually on a locked-down office network | **The fix:** set up the free Cloudflare relay (see below). **On the day:** the left-hand player clicks **Play on this device** and both play side by side on one keyboard. Or the organiser presses **Play here** on the big screen. |
 | Someone doesn't turn up | Admin page → **Manage** on that match → *goes through* (walkover). |
 | A laptop drops out mid-match | The match pauses and picks up again when they reconnect, usually within 10 seconds of their network coming back. If the left-hand player reloads, the match carries on from the saved score. |
+| The other player's men sometimes slide into place | That is prediction at work over a long distance (see *Lag* below): your own men react the moment you press, and your opponent's jumps reach you a moment late. If it ever looks wrong, tick **Equal delay instead of prediction** in the admin page's rules: both players then see their match equally late and nothing slides. |
 | A result is wrong | Admin page → **Manage** → enter the right score. This works until the next match has started. |
 | You want to start again | Admin page → **Back to the lobby** keeps the players and clears the bracket. |
 
@@ -74,6 +75,7 @@ node test/scenarios.mjs                     # reloads, dropped connections, the 
                                             # walkovers, the big-screen grid, the dead-ball ring online
 PLAYERS=16 node test/e2e.mjs                # a whole cup, 8 matches at a time, every match on the big screen
 node test/rounds.mjs                        # every ball and crazy round, drawn and played
+node test/lag.mjs 75 15                     # 75 ms each way, 15 ms jitter: how late presses show, on each screen
 BASE=http://localhost:3000 node test/smoke.mjs    # screenshots of every page
 node test/physics.mjs 120 6                 # CPU v CPU without drawing: goals, falls, jump heights, hop distances
 HOPS=1 node test/physics.mjs 0 8            # each man hopping at the peak of his sway, forward and back
@@ -82,7 +84,7 @@ MODS=1 node test/physics.mjs 600 3          # crazy rounds on, a long soak
 
 To run them against Redis instead of the memory store, start the server with `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` set (a free Upstash database works).
 
-`?bot=0.7` only works in builds made with `NEXT_PUBLIC_BOTS=1`. That way nobody can let the CPU play for them in the real cup.
+`?bot=0.7` only works in builds made with `NEXT_PUBLIC_BOTS=1`. That way nobody can let the CPU play for them in the real cup. The same goes for `?lag=75&jitter=15` on a match page (holds back what that side receives, like a long way round the world) and `?net=fair` (prediction off, like the *Equal delay* rule).
 
 ## How it is built
 
@@ -94,11 +96,17 @@ To run them against Redis instead of the memory store, start the server with `UP
     - `practice` and `local2p`: simulated on this device.
     - `demo`: CPU against CPU.
     - `host`: simulates and streams snapshots.
-    - `guest` and `spectator`: draw the host's snapshots. Spectators are the organiser's big screen: watching needs the admin key, and each pitch in the grid can draw less often, at lower resolution, or not at all while another match fills the screen.
+    - `guest`: runs its own copy of the match a little ahead of the host (prediction, below).
+    - `spectator`: draws the host's snapshots. Spectators are the organiser's big screen: watching needs the admin key, and each pitch in the grid can draw less often, at lower resolution, or not at all while another match fills the screen.
 - **`lib/net/link.js`** is the peer-to-peer link (WebRTC data channels).
-  - The left-hand player (the host) runs the physics. It streams binary snapshots about 30 times a second on an unordered, no-retry channel, and events and button presses on a reliable one.
+  - The left-hand player (the host) runs the physics. It streams binary snapshots 60 times a second on an unordered, no-retry channel, and events and button presses on a reliable one.
   - Signaling goes through small mailboxes in Redis (`/api/t/{code}/m/{id}/signal`). Each side gathers its network candidates in full first, so a connection needs exactly one offer and one answer.
-  - **Fairness:** the host watches its own match delayed by the round-trip time plus 70 ms, which is what the guest sees. Both players get the same reaction delay.
+- **Lag:** between New Jersey and Buenos Aires a message takes about 150 ms there and back, and no buffer can make that shorter. So the game predicts:
+  - **The host** draws its match as it happens, so its own presses show at once.
+  - **The guest** runs its own copy of the match a little ahead of the host: far enough that a press made now reaches the host before the host gets to that tick. Its own men react at once. Each press is stamped with that tick, and the host applies it on exactly that tick, so both matches agree.
+  - 20 times a second the host also sends the guest its **full state**: every body with its speed, each man's timers, and what the physics solver carries from one step to the next. When the copy had the same at that tick, which is most of the time, nothing happens. When the host did something the copy couldn't know (a press, usually), the copy goes back to the host's state and runs the ticks since again. Anything that moved because of that slides into place over about a tenth of a second.
+  - Measured with 75 ms each way plus 15 ms of jitter (`test/lag.mjs`): a press shows on the presser's own screen within a frame (it was about 300 ms before, for both players). The other player's presses show 130–160 ms after they press (220–390 ms before).
+  - **Equal delay** (a rule on the admin page, for when prediction misbehaves) switches this off: the guest draws the host's snapshots with just enough buffer for its connection, and the host waits as long, so both react equally late. A jump still uses the lean the player saw when pressing.
 - **`lib/tournament.ts`** is the knockout bracket, written as pure functions over one JSON document. It covers seeding, byes, advancing and organiser corrections.
 - **`lib/store.ts`** connects to Upstash Redis. Updates are compare-and-swap through a small Lua script, so simultaneous results never overwrite each other. It falls back to memory for local development.
 - **API routes:**
